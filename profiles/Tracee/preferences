@@ -1,0 +1,15 @@
+####### User Interface: Columns ########
+
+# Packet list column format
+# Each pair of strings consists of a column title and its format
+gui.column.format:
+	"No.", "%m",
+	"Time", "%t",
+	"Protocol", "%p",
+	"PID", "%Cus:tracee.pid_col:0:L",
+	"TID", "%Cus:tracee.tid_col:0:L",
+	"Process Name", "%Cus:tracee.processName:0:L",
+	"Syscall", "%Cus:tracee.syscall:0:L",
+	"Container", "%Cus:tracee.container_col:0:L",
+	"Event", "%Cus:tracee.eventName:0:L",
+	"Info", "%i"
