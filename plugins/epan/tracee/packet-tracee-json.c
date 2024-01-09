@@ -515,8 +515,8 @@ static void dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     proto_tree_add_string(properties_tree, hf_metadata_properties_kubernetes_technique, tvb, 0, 0, tmp_str);
 
     // add severity
-    DISSECTOR_ASSERT(json_get_int(json_data, properties_token, "Severity", &tmp_int));
-    proto_tree_add_int(properties_tree, hf_metadata_properties_severity, tvb, 0, 0, tmp_int);
+    DISSECTOR_ASSERT((json_get_int(json_data, properties_token, "Severity", &tmp_int)));
+    proto_tree_add_int(properties_tree, hf_metadata_properties_severity, tvb, 0, 0, (gint32)tmp_int);
 
     // add technique
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, properties_token, "Technique")) != NULL);
