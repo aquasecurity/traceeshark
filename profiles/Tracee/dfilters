@@ -1,0 +1,4 @@
+"Tracee event name" tracee.eventName == "sched_process_exec"
+"Process name" tracee.processName == "bash"
+"Container image" tracee.container.image == "ubuntu:latest"
+"Syscall" tracee.syscall == "execve"
