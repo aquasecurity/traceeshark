@@ -6,10 +6,10 @@ gui.column.format:
 	"No.", "%m",
 	"Time", "%t",
 	"Protocol", "%p",
+	"Container", "%Cus:tracee.container_col:0:L",
 	"PID", "%Cus:tracee.pid_col:0:L",
 	"TID", "%Cus:tracee.tid_col:0:L",
 	"Process Name", "%Cus:tracee.processName:0:L",
-	"Syscall", "%Cus:tracee.syscall:0:L",
-	"Container", "%Cus:tracee.container_col:0:L",
 	"Event", "%Cus:tracee.eventName:0:L",
+	"Originating Syscall", "%Cus:tracee.syscall:0:L",
 	"Info", "%i"
