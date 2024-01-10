@@ -163,8 +163,8 @@ static gboolean tracee_json_read_event(FILE_T fh, wtap_rec *rec, Buffer *buf, in
     // set up record
     rec->rec_type = REC_TYPE_PACKET;
     rec->block = wtap_block_create(WTAP_BLOCK_PACKET);
-	rec->rec_header.packet_header.caplen = len;
-	rec->rec_header.packet_header.len = len;
+	rec->rec_header.packet_header.caplen = (guint32)len;
+	rec->rec_header.packet_header.len = (guint32)len;
 
     rec->ts.secs = ts->secs;
     rec->ts.nsecs = ts->nsecs;
