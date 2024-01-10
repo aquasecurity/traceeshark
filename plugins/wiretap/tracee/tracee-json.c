@@ -226,7 +226,7 @@ tracee_json_open(wtap *wth, int *err, char **err_info)
     }
 
     // compare beginning of file to the beginning of the 2 possible JSON types (events and logs)
-    if (strncmp(buf, "{\"level\":", sizeof(buf)) != 0 && strncmp(buf, "{\"timestamp\":", sizeof(buf)) != 0) {
+    if (strncmp(buf, "{\"level\":", 9) != 0 && strncmp(buf, "{\"timestamp\":", 13) != 0) {
         ws_warning("not ours");
         return WTAP_OPEN_NOT_MINE;
     }
