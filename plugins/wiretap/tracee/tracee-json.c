@@ -125,14 +125,15 @@ static gboolean tracee_json_read_event(FILE_T fh, wtap_rec *rec, Buffer *buf, in
     // read lines from the log file until an event is found
     while (TRUE) {
         // read a line
-        ws_info("reading line at offset 0x%08" PRIx64, file_tell(fh));
+        ws_info("reading line at offset 0x%08" PRIx64, offset);
         if ((data = file_gets_line(fh, 0)) == NULL)
             return FALSE;
         
         // tracee events start with {"timestamp":
         if (strncmp(data, "{\"timestamp\":", 13) == 0)
             break;
-
+        
+        offset = file_tell(fh);
     }
 
     ws_info("found an event");
@@ -150,6 +151,7 @@ static gboolean tracee_json_read_event(FILE_T fh, wtap_rec *rec, Buffer *buf, in
 
         // insert timestamp into hash table
         key = g_new(gint64, 1);
+        *key = offset;
         g_hash_table_insert(tracee_json->event_timestamps, key, ts);
     }
 
@@ -269,7 +271,7 @@ static const struct file_type_subtype_info tracee_json_info = {
 };
 
 void
-wtap_register_usbdump(void)
+wtap_register_tracee_json(void)
 {
     struct open_info oi = {
         "Tracee JSON",

@@ -64,13 +64,42 @@ static gint ett_tracee_json = -1;
 static gint ett_container = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
+static gint ett_args = -1;
 
-struct container_fields {
-    gchar *id;
-    gchar *name;
-    gchar *image;
-    gchar *image_digest;
+struct event_dynamic_hf {
+    GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
+    wmem_map_t *arg_idx_map;    // mapping between argument name to its index in the hf array
 };
+
+/**
+ * This map contains registered dynamic field arrays for each event type in the capture file.
+ * These dynamic fields are for the arguments, which differ between event types but are always
+ * the same for each event type.
+ */
+static wmem_map_t *event_dynamic_hf_map;
+
+static void free_dynamic_hf(gpointer key _U_, gpointer value, gpointer user_data _U_)
+{
+    guint i;
+    struct hf_register_info *hf;
+    struct event_dynamic_hf *dynamic_hf = value;
+    gpointer *hf_ptrs;
+
+    for (i = 0; i < dynamic_hf->hf_ptrs->len; i++) {
+        hf = (hf_register_info *)dynamic_hf->hf_ptrs->pdata[i];
+        proto_deregister_field(proto_tracee_json, *(hf->p_id));
+    }
+    hf_ptrs = g_ptr_array_free(dynamic_hf->hf_ptrs, FALSE);
+    proto_add_deregistered_data(hf_ptrs);
+}
+
+static bool dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
+{
+    wmem_map_foreach(event_dynamic_hf_map, free_dynamic_hf, NULL);
+
+    // return TRUE so this callback isn't unregistered
+    return TRUE;
+}
 
 /*
  * From wsutil/jsmn.c
@@ -112,7 +141,42 @@ static bool json_get_int(char *buf, jsmntok_t *parent, const char *name, gint64 
     return false;
 }
 
-static void dissect_container_fields(tvbuff_t *tvb, proto_tree *tree, char *json_data, jsmntok_t *root_token, struct container_fields *fields)
+/**
+ * Get a null object belonging to parent object and named as the name variable.
+ * Returns FALSE if not found or the object is not a null. Caution: it modifies input buffer.
+ */
+bool json_get_null(char *buf, jsmntok_t *parent, const char *name)
+{
+    int i;
+    size_t tok_len;
+    jsmntok_t *cur = parent+1;
+
+    for (i = 0; i < parent->size; i++) {
+        if (cur->type == JSMN_STRING &&
+            !strncmp(&buf[cur->start], name, cur->end - cur->start)
+            && strlen(name) == (size_t)(cur->end - cur->start) &&
+            cur->size == 1 && (cur+1)->type == JSMN_PRIMITIVE) {
+            /* JSMN_STRICT guarantees that a primitive starts with the
+             * correct character.
+             */
+            tok_len = (cur+1)->end - (cur+1)->start;
+            if (tok_len == 4 && strncmp(&buf[(cur+1)->start], "null", tok_len) == 0)
+                return true;
+            return false;
+        }
+        cur = json_get_next_object(cur);
+    }
+    return false;
+}
+
+struct container_fields {
+    gchar *id;
+    gchar *name;
+    gchar *image;
+    gchar *image_digest;
+};
+
+static void dissect_container_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *root_token, struct container_fields *fields)
 {
     proto_item *container_item, *tmp_item;
     proto_tree *container_tree;
@@ -153,7 +217,270 @@ static void dissect_container_fields(tvbuff_t *tvb, proto_tree *tree, char *json
     proto_item_set_generated(tmp_item);
 }
 
-static void dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, char *json_data, jsmntok_t *root_token)
+struct type_display {
+    enum ftenum type;
+    int display;
+    const void *format_cb;
+};
+
+static gchar *normalize_arg_name(const gchar *name)
+{
+    GString *new_name;
+
+    // replace spaces with underscores
+    DISSECTOR_ASSERT((new_name = g_string_new(name)) != NULL);
+    g_string_replace(new_name, " ", "_", 0);
+
+    return g_string_free(new_name, FALSE);
+}
+
+/**
+ * Determine the field type and display based on the type string.
+ */
+static void get_arg_field_type_display(const gchar *type, struct type_display *info)
+{
+    info->format_cb = NULL;
+
+    // string
+    if (strcmp(type, "const char *")    == 0 ||
+        strcmp(type, "const char*")     == 0 ||
+        strcmp(type, "string")          == 0 ||
+        strcmp(type, "char*")           == 0 ||
+        strcmp(type, "bytes")           == 0 ||
+        strcmp(type, "void*")           == 0) {
+        
+        info->type = FT_STRINGZ;
+        info->display = BASE_NONE;
+    }
+
+    // bool
+    else if (strcmp(type, "bool") == 0) {
+        info->type = FT_BOOLEAN;
+        info->display = BASE_NONE;
+    }
+
+    // u16
+    else if (strcmp(type, "umode_t") == 0) {
+        info->type = FT_UINT16;
+        info->display = BASE_DEC;
+    }
+
+    // s32
+    else if (strcmp(type, "int")    == 0 ||
+             strcmp(type, "pid_t")  == 0) {
+        
+        info->type = FT_INT32;
+        info->display = BASE_DEC;
+
+    }
+
+    // u32
+    else if (strcmp(type, "dev_t")  == 0 ||
+             strcmp(type, "u32")    == 0) {
+        
+        info->type = FT_UINT32;
+        info->display = BASE_DEC;
+    }
+
+    // s64
+    else if (strcmp(type, "long") == 0) {
+        info->type = FT_INT64;
+        info->display = BASE_DEC;
+    }
+
+    // u64
+    else if (strcmp(type, "unsigned long")  == 0 ||
+             strcmp(type, "u64")            == 0 ||
+             strcmp(type, "size_t")         == 0) {
+        
+        info->type = FT_UINT64;
+        info->display = BASE_DEC;
+    }
+
+    // not supported yet
+    else if (strcmp(type, "unknown")                            == 0 ||
+             strcmp(type, "const char*const*")                  == 0 ||
+             strcmp(type, "struct sockaddr*")                   == 0 ||
+             strcmp(type, "const char**")                       == 0 ||
+             strcmp(type, "slim_cred_t")                        == 0 ||
+             strcmp(type, "map[string]trace.HookedSymbolData")  == 0 ||
+             strcmp(type, "trace.PktMeta")                      == 0 ||
+             strcmp(type, "[]trace.DnsResponseData")            == 0 ||
+             strcmp(type, "[]trace.DnsQueryData")               == 0 ||
+             strcmp(type, "trace.ProtoHTTPRequest")             == 0) {
+        
+        info->type = FT_NONE;
+        info->display = BASE_NONE;
+    }
+
+    else {
+        ws_warning("unknown type \"%s\"", type);
+        DISSECTOR_ASSERT_NOT_REACHED();
+    }
+}
+
+static void dynamic_hf_populate_arg_field(hf_register_info *hf, const gchar *name, const gchar *type)
+{
+    gchar *name_normalized;
+    struct type_display info;
+
+    hf->p_id = wmem_new(wmem_file_scope(), int);
+    *(hf->p_id) = -1;
+
+    hf->hfinfo.name = g_strdup(name);
+    name_normalized = normalize_arg_name(name);
+    hf->hfinfo.abbrev = g_strdup_printf("tracee.args.%s", name_normalized);
+    g_free(name_normalized);
+
+    get_arg_field_type_display(type, &info);
+
+    hf->hfinfo.type = info.type;
+    hf->hfinfo.display = info.display;
+    hf->hfinfo.strings = info.format_cb;
+    hf->hfinfo.bitmask = 0;
+    hf->hfinfo.blurb = g_strdup(name);
+    HFILL_INIT(hf[0]);
+}
+
+static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, jsmntok_t *arg_token)
+{
+    struct event_dynamic_hf *dynamic_hf;
+    gchar *event_name_copy, *arg_name, *arg_type, *arg_name_copy;
+    int *hf_idx;
+    hf_register_info *hf;
+
+    // try fetching the dynamic hf for this event
+    if ((dynamic_hf = wmem_map_lookup(event_dynamic_hf_map, event_name)) == NULL) {
+        // no dynamic hf for this event - create it
+        dynamic_hf = wmem_new(wmem_file_scope(), struct event_dynamic_hf);
+        dynamic_hf->hf_ptrs = g_ptr_array_new();
+        dynamic_hf->arg_idx_map = wmem_map_new(wmem_file_scope(), g_str_hash, g_str_equal);
+        event_name_copy = wmem_strdup(wmem_file_scope(), event_name);
+        wmem_map_insert(event_dynamic_hf_map, event_name_copy, dynamic_hf);
+    }
+
+    // check if the field for this argument is already registered, if so return it
+    DISSECTOR_ASSERT((arg_name = json_get_string(json_data, arg_token, "name")) != NULL);
+    if ((hf_idx = wmem_map_lookup(dynamic_hf->arg_idx_map, arg_name)) != NULL)
+        return (hf_register_info *)dynamic_hf->hf_ptrs->pdata[*hf_idx];
+    
+    // field not registered yet - create it
+    DISSECTOR_ASSERT((arg_type = json_get_string(json_data, arg_token, "type")) != NULL);
+    
+    // create the hf and add it to the array
+    hf = g_new0(hf_register_info, 1);
+    g_ptr_array_add(dynamic_hf->hf_ptrs, hf);
+    hf_idx = wmem_new(wmem_file_scope(), int);
+    *hf_idx = dynamic_hf->hf_ptrs->len - 1;
+
+    // populate the field info
+    dynamic_hf_populate_arg_field(hf, arg_name, arg_type);
+
+    // update arg name to idx map
+    arg_name_copy = wmem_strdup(wmem_file_scope(), arg_name);
+    wmem_map_insert(dynamic_hf->arg_idx_map, arg_name_copy, hf_idx);
+
+    // register the added field with wireshark
+    proto_register_field_array(proto_tracee_json, hf, 1);
+
+    return hf;
+}
+
+static void dissect_arguments(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *root_token, const gchar *event_name)
+{
+    jsmntok_t *args_token, *curr_arg;
+    int nargs, i;
+    proto_tree *args_tree;
+    hf_register_info *hf;
+    union {
+        gint32 s32;
+        guint32 u32;
+        gint64 s64;
+        guint64 u64;
+        bool boolean;
+        gchar *str;
+    } val;
+    gchar *arg_type;
+    proto_item *tmp_item;
+
+    DISSECTOR_ASSERT((args_token = json_get_array(json_data, root_token, "args")) != NULL);
+    DISSECTOR_ASSERT((nargs = json_get_array_len(args_token)) > 0);
+
+    args_tree = proto_tree_add_subtree(tree, tvb, 0, 0, ett_args, NULL, "Args");
+
+    // go through all arguments
+    for (i = 0; i < nargs; i++) {
+        DISSECTOR_ASSERT((curr_arg = json_get_array_index(args_token, i)) != NULL);
+
+        // get hf for this argument
+        hf = get_arg_hf(event_name, json_data, curr_arg);
+
+        // parse value according to type
+        switch (hf->hfinfo.type) {
+            // small signed integer types
+            case FT_INT8:
+            case FT_INT16:
+            case FT_INT32:
+                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, val.s32);
+                break;
+            
+            // small unsigned integer types
+            case FT_UINT8:
+            case FT_UINT16:
+            case FT_UINT32:
+                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
+                break;
+            
+            // large signed integer
+            case FT_INT64:
+                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, val.s64);
+                break;
+            
+            // large unsigned integer
+            case FT_UINT64:
+                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, val.u64);
+                break;
+            
+            // boolean
+            case FT_BOOLEAN:
+                DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &(val.boolean)));
+                proto_tree_add_boolean(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
+                break;
+            
+            // string
+            case FT_STRINGZ:
+                // try reading a string
+                if ((val.str = json_get_string(json_data, curr_arg, "value")) != NULL)
+                    proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, val.str);
+                // no a string - try reading a null
+                else if (json_get_null(json_data, curr_arg, "value"))
+                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "null");
+                // not a null - try reading a false
+                else {
+                    DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &val.boolean));
+                    DISSECTOR_ASSERT(val.boolean == false);
+                    proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "false");
+                }
+                break;
+            
+            // unsupported types
+            case FT_NONE:
+                DISSECTOR_ASSERT((arg_type = json_get_string(json_data, curr_arg, "type")) != NULL);
+                tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
+                proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
+                break;
+            
+            default:
+                DISSECTOR_ASSERT_NOT_REACHED();
+        }
+    }
+}
+
+static void dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_token)
 {
     jsmntok_t *metadata_token, *properties_token;
     proto_tree *metadata_tree, *properties_tree;
@@ -188,7 +515,7 @@ static void dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     proto_tree_add_string(properties_tree, hf_metadata_properties_kubernetes_technique, tvb, 0, 0, tmp_str);
 
     // add severity
-    DISSECTOR_ASSERT((json_get_int(json_data, properties_token, "Severity", &tmp_int)));
+    DISSECTOR_ASSERT(json_get_int(json_data, properties_token, "Severity", &tmp_int));
     proto_tree_add_int(properties_tree, hf_metadata_properties_severity, tvb, 0, 0, tmp_int);
 
     // add technique
@@ -217,7 +544,7 @@ static void dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     col_set_str(pinfo->cinfo, COL_INFO, tmp_str);
 }
 
-static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, char *json_data)
+static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
 {
     int num_tokens;
     jsmntok_t *root_token;
@@ -331,18 +658,21 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     if (syscall != NULL && strlen(syscall) > 0)
         col_append_fstr(pinfo->cinfo, COL_INFO, ", SYSCALL=%s", syscall);
     
+    // add arguments
+    dissect_arguments(tvb, tree, json_data, root_token, event_name);
+    
     // add signature metadata fields
     dissect_metadata_fields(tvb, pinfo, tree, json_data, root_token);
 
     return event_name;
 }
 
-static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree _U_, void *data _U_)
+static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
 {
     proto_tree *tracee_json_tree;
     proto_item *tracee_json_item;
     guint len;
-    char *json_data;
+    gchar *json_data;
     gchar *event_name _U_;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
@@ -360,7 +690,7 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
     json_data[len] = '\0';
     DISSECTOR_ASSERT_HINT(json_validate(json_data, len), "Invalid JSON");
 
-    // dissect basic fields
+    // dissect event fields
     event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
 
     // call dissector for this event
@@ -375,7 +705,8 @@ void proto_register_tracee_json(void)
         &ett_tracee_json,
         &ett_container,
         &ett_metadata,
-        &ett_metadata_properties
+        &ett_metadata_properties,
+        &ett_args
     };
 
     static hf_register_info hf[] = {
@@ -544,6 +875,11 @@ void proto_register_tracee_json(void)
     proto_tracee_json = proto_register_protocol("Tracee JSON", "TRACEE", "tracee_json");
     proto_register_field_array(proto_tracee_json, hf, array_length(hf));
     proto_register_subtree_array(ett, array_length(ett));
+
+    // create dynamic field array map for event arguments
+    // and register a callback to unregister the dynamic fields when the map is destroyed
+    event_dynamic_hf_map = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_str_hash, g_str_equal);
+    wmem_register_callback(wmem_file_scope(), dynamic_hf_map_destroy_cb, NULL);
 
     // register event name dissector table
     event_name_dissector_table = register_dissector_table("tracee_json.eventName",
