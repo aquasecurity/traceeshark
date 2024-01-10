@@ -249,6 +249,8 @@ tracee_json_open(wtap *wth, int *err, char **err_info)
     wth->snapshot_length = 0;
     wth->priv = tracee_json;
 
+    wtap_add_generated_idb(wth);
+
     return WTAP_OPEN_MINE;
 }
 
