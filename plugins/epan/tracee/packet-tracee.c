@@ -45,7 +45,7 @@ static int hf_syscall = -1;
 //static int hf_thread_entity_id = -1;
 //static int hf_process_entity_id = -1;
 //static int parent_entity_id = -1;
-// ARGS
+static int hf_args_argv = -1;
 static int hf_metadata_version = -1;
 static int hf_metadata_description = -1;
 //static int hf_metadata_tags = -1;
@@ -169,13 +169,6 @@ bool json_get_null(char *buf, jsmntok_t *parent, const char *name)
     return false;
 }
 
-struct container_fields {
-    gchar *id;
-    gchar *name;
-    gchar *image;
-    gchar *image_digest;
-};
-
 static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_token)
 {
     proto_item *container_item, *tmp_item;
@@ -252,12 +245,14 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     info->format_cb = NULL;
 
     // string
-    if (strcmp(type, "const char *")    == 0 ||
-        strcmp(type, "const char*")     == 0 ||
-        strcmp(type, "string")          == 0 ||
-        strcmp(type, "char*")           == 0 ||
-        strcmp(type, "bytes")           == 0 ||
-        strcmp(type, "void*")           == 0) {
+    if (strcmp(type, "const char *")        == 0 ||
+        strcmp(type, "const char*")         == 0 ||
+        strcmp(type, "string")              == 0 ||
+        strcmp(type, "char*")               == 0 ||
+        strcmp(type, "bytes")               == 0 ||
+        strcmp(type, "void*")               == 0 ||
+        strcmp(type, "const char*const*")   == 0 ||
+        strcmp(type, "const char**")        == 0) {
         
         info->type = FT_STRINGZ;
         info->display = BASE_NONE;
@@ -307,11 +302,9 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
         info->display = BASE_DEC;
     }
 
-    // not supported yet
+    // complex types
     else if (strcmp(type, "unknown")                            == 0 ||
-             strcmp(type, "const char*const*")                  == 0 ||
              strcmp(type, "struct sockaddr*")                   == 0 ||
-             strcmp(type, "const char**")                       == 0 ||
              strcmp(type, "slim_cred_t")                        == 0 ||
              strcmp(type, "map[string]trace.HookedSymbolData")  == 0 ||
              strcmp(type, "trace.PktMeta")                      == 0 ||
@@ -396,6 +389,77 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     return hf;
 }
 
+static gint new_dynamic_ett(void)
+{
+    gint **dynamic_ett = wmem_new(wmem_file_scope(), gint *);
+    *dynamic_ett = wmem_new(wmem_file_scope(), gint);
+    **dynamic_ett = -1;
+    proto_register_subtree_array(dynamic_ett, 1);
+    return **dynamic_ett;
+}
+
+static void dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    jsmntok_t *arr_tok, *elem_tok;
+    gint dynamic_ett;
+    proto_tree *arr_tree;
+    proto_item *arr_item, *tmp_item;
+    int arr_len, i;
+    gchar *str;
+
+    // register a dynamic subtree for the array
+    dynamic_ett = new_dynamic_ett();
+    
+    // create the subtree
+    arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(arr_item, "%s", hf->hfinfo.name);
+    arr_tree = proto_item_add_subtree(arr_item, dynamic_ett);
+
+    // get array
+    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL) {
+        DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
+        proto_item_append_text(arr_item, ": %d items", arr_len);
+    }
+    // not an array - try getting a null
+    else if (json_get_null(json_data, arg_tok, "value")) {
+        proto_item_append_text(arr_item, ": (null)");
+        return;
+    }
+    else
+        DISSECTOR_ASSERT_NOT_REACHED();
+    
+    // iterate through all elements
+    for (i = 0; i < arr_len; i++) {
+        // get element
+        DISSECTOR_ASSERT((elem_tok = json_get_array_index(arr_tok, i)) != NULL);
+        
+        // make sure it's a string
+        DISSECTOR_ASSERT(elem_tok->type == JSMN_STRING);
+
+        // get the value
+        json_data[(elem_tok)->end] = '\0';
+        str = &json_data[elem_tok->start];
+        DISSECTOR_ASSERT(json_decode_string_inplace(str));
+
+        // add the value to the dissection tree
+        tmp_item = proto_tree_add_string(arr_tree, *(hf->p_id), tvb, 0, 0, str);
+        proto_item_set_text(tmp_item, "%s[%d]: %s", hf->hfinfo.name, i, proto_item_get_display_repr(wmem_packet_scope(), tmp_item));
+    }
+}
+
+static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token)
+{
+    // string array
+    if (strcmp(arg_type, "const char*const*")   == 0 ||
+            strcmp(arg_type, "const char**")    == 0)
+        dissect_string_array(tvb, tree, hf, json_data, arg_token);
+    
+    else
+        return FALSE;
+    
+    return TRUE;
+}
+
 static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_token, const gchar *event_name)
 {
     jsmntok_t *args_token, *curr_arg;
@@ -425,10 +489,15 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
     // go through all arguments
     for (i = 0; i < nargs; i++) {
         DISSECTOR_ASSERT((curr_arg = json_get_array_index(args_token, i)) != NULL);
+        DISSECTOR_ASSERT((arg_type = json_get_string(json_data, curr_arg, "type")) != NULL);
         arg_str = NULL;
 
         // get hf for this argument
         hf = get_arg_hf(event_name, json_data, curr_arg);
+
+        // try dissecting it as a complex type
+        if (dissect_complex_arg(tvb, args_tree, hf, arg_type, json_data, curr_arg))
+            continue;
 
         // parse value according to type
         switch (hf->hfinfo.type) {
@@ -494,7 +563,6 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
             
             // unsupported types
             case FT_NONE:
-                DISSECTOR_ASSERT((arg_type = json_get_string(json_data, curr_arg, "type")) != NULL);
                 tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
                 proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
                 break;
@@ -839,6 +907,11 @@ void proto_register_tracee(void)
           { "Syscall", "tracee.syscall",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Originating syscall", HFILL }
+        },
+        { &hf_args_argv,
+          { "Argv", "tracee.args.argv",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Process arguments", HFILL }
         },
         { &hf_metadata_version,
           { "Version", "tracee.metadata.Version",
