@@ -13,7 +13,7 @@ include(WiresharkPlugin)
 set_module_info(tracee-epan 0 0 1 0)
 
 set(DISSECTOR_SRC
-	packet-tracee-json.c
+	packet-tracee.c
 )
 
 set(PLUGIN_FILES

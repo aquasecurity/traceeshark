@@ -2,7 +2,7 @@
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
 
-static int proto_tracee_json = -1;
+static int proto_tracee = -1;
 
 static dissector_table_t event_name_dissector_table;
 
@@ -60,7 +60,7 @@ static int hf_metadata_properties_release = -1;
 static int hf_metadata_properties_signature_id = -1;
 static int hf_metadata_properties_signature_name = -1;
 
-static gint ett_tracee_json = -1;
+static gint ett_tracee = -1;
 static gint ett_container = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
@@ -87,7 +87,7 @@ static void free_dynamic_hf(gpointer key _U_, gpointer value, gpointer user_data
 
     for (i = 0; i < dynamic_hf->hf_ptrs->len; i++) {
         hf = (hf_register_info *)dynamic_hf->hf_ptrs->pdata[i];
-        proto_deregister_field(proto_tracee_json, *(hf->p_id));
+        proto_deregister_field(proto_tracee, *(hf->p_id));
     }
     hf_ptrs = g_ptr_array_free(dynamic_hf->hf_ptrs, FALSE);
     proto_add_deregistered_data(hf_ptrs);
@@ -182,7 +182,7 @@ static void dissect_container_fields(tvbuff_t *tvb, proto_tree *tree, gchar *jso
     proto_tree *container_tree;
     jsmntok_t *container_token;
 
-    container_item = proto_tree_add_item(tree, proto_tracee_json, tvb, 0, 0, ENC_NA);
+    container_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(container_item, "Container");
     container_tree = proto_item_add_subtree(container_item, ett_container);
 
@@ -381,7 +381,7 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     wmem_map_insert(dynamic_hf->arg_idx_map, arg_name_copy, hf_idx);
 
     // register the added field with wireshark
-    proto_register_field_array(proto_tracee_json, hf, 1);
+    proto_register_field_array(proto_tracee, hf, 1);
 
     return hf;
 }
@@ -678,8 +678,8 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
 
     // create tracee tree
-    tracee_json_tree = proto_tree_add_item(tree, proto_tracee_json, tvb, 0, -1, ENC_NA);
-    tracee_json_item = proto_item_add_subtree(tracee_json_tree, ett_tracee_json);
+    tracee_json_tree = proto_tree_add_item(tree, proto_tracee, tvb, 0, -1, ENC_NA);
+    tracee_json_item = proto_item_add_subtree(tracee_json_tree, ett_tracee);
 
     proto_item_set_text(tracee_json_tree, "Tracee Event (JSON)");
 
@@ -699,10 +699,10 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     return tvb_captured_length(tvb);
 }
 
-void proto_register_tracee_json(void)
+void proto_register_tracee(void)
 {
     static gint *ett[] = {
-        &ett_tracee_json,
+        &ett_tracee,
         &ett_container,
         &ett_metadata,
         &ett_metadata_properties,
@@ -872,8 +872,8 @@ void proto_register_tracee_json(void)
         }
     };
 
-    proto_tracee_json = proto_register_protocol("Tracee JSON", "TRACEE", "tracee_json");
-    proto_register_field_array(proto_tracee_json, hf, array_length(hf));
+    proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
+    proto_register_field_array(proto_tracee, hf, array_length(hf));
     proto_register_subtree_array(ett, array_length(ett));
 
     // create dynamic field array map for event arguments
@@ -882,15 +882,15 @@ void proto_register_tracee_json(void)
     wmem_register_callback(wmem_file_scope(), dynamic_hf_map_destroy_cb, NULL);
 
     // register event name dissector table
-    event_name_dissector_table = register_dissector_table("tracee_json.eventName",
-        "Tracee event name", proto_tracee_json, FT_STRINGZ, FALSE);
+    event_name_dissector_table = register_dissector_table("tracee.eventName",
+        "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);
 }
 
-void proto_reg_handoff_tracee_json(void)
+void proto_reg_handoff_tracee(void)
 {
     static dissector_handle_t tracee_json_handle;
 
-    tracee_json_handle = create_dissector_handle(dissect_tracee_json, proto_tracee_json);
+    tracee_json_handle = create_dissector_handle(dissect_tracee_json, proto_tracee);
     
     // register to event type dissector table
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);

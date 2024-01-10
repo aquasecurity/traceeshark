@@ -4,7 +4,7 @@ all: copy-source build
 # copy only source files to wireshark source tree
 copy-source:
 	@if [ -d "wireshark/plugins/epan/tracee" ]; then \
-        cp plugins/epan/tracee/packet-tracee-json.c wireshark/plugins/epan/tracee; \
+        cp plugins/epan/tracee/packet-tracee.c wireshark/plugins/epan/tracee; \
     else \
         error "Tracee plugin directory doesn't exist, run \"make cmake\" first."; \
     fi
