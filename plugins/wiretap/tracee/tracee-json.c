@@ -214,21 +214,24 @@ static void tracee_json_close(wtap *wth)
 static wtap_open_return_val
 tracee_json_open(wtap *wth, int *err, char **err_info)
 {
-    char buf[1];
+    char buf[13]; // enough to hold {"timestamp":
     struct tracee_json *tracee_json;
 
     // assume the file is ours if it starts with an opening bracket (TODO: find a better way to determine if this is a tracee json log)
-    if (!wtap_read_bytes(wth->fh, &buf, 1, err, err_info)) {
+    if (!wtap_read_bytes(wth->fh, &buf, sizeof(buf), err, err_info)) {
         // EOF
         if (*err == 0)
             return WTAP_OPEN_NOT_MINE;
         return WTAP_OPEN_ERROR;
     }
 
-    if (buf[0] != '{')
+    // compare beginning of file to the beginning of the 2 possible JSON types (events and logs)
+    if (strncmp(buf, "{\"level\":", sizeof(buf)) != 0 && strncmp(buf, "{\"timestamp\":", sizeof(buf)) != 0) {
+        ws_warning("not ours");
         return WTAP_OPEN_NOT_MINE;
+    }
     
-    ws_info("file starts with '{', assuming it's a tracee json log");
+    ws_info("file starts with '{\"level\":' or with '{\"timestamp\":', assuming it's a tracee json log");
 
     // seek back to the beginning of the file
     if (file_seek(wth->fh, 0, SEEK_SET, err) == -1)
