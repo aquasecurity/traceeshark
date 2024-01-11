@@ -56,6 +56,14 @@ static int hf_process_lineage_command = -1;
 static int hf_tiggered_by_id = -1;
 static int hf_tiggered_by_name = -1;
 static int hf_tiggered_by_return_value = -1;
+static int hf_sockaddr_sa_family = -1;
+static int hf_sockaddr_sun_path = -1;
+static int hf_sockaddr_sin_addr = -1;
+static int hf_sockaddr_sin_port = -1;
+static int hf_sockaddr_sin6_addr = -1;
+static int hf_sockaddr_sin6_port = -1;
+static int hf_sockaddr_sin6_flowinfo = -1;
+static int hf_sockaddr_sin6_scopeid = -1;
 static int hf_metadata_version = -1;
 static int hf_metadata_description = -1;
 //static int hf_metadata_tags = -1;
@@ -75,10 +83,11 @@ static gint ett_container = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
 static gint ett_args = -1;
-static gint ett_args_arr = -1;
+static gint ett_string_arr = -1;
 static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
 static gint ett_triggered_by = -1;
+static gint ett_sockaddr = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -423,7 +432,7 @@ static wmem_array_t *dissect_string_array(tvbuff_t *tvb, packet_info *pinfo, pro
     // create the subtree
     arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(arr_item, "%s", hf->hfinfo.name);
-    arr_tree = proto_item_add_subtree(arr_item, ett_args_arr);
+    arr_tree = proto_item_add_subtree(arr_item, ett_string_arr);
 
     // get array
     if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL) {
@@ -627,6 +636,60 @@ static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_return_value, tvb, 0, 0, tmp_int);
 }
 
+static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok)
+{
+    proto_item *sockaddr_item;
+    proto_tree *sockaddr_tree;
+    jsmntok_t *sockaddr_tok;
+    gchar *tmp_str;
+    gint64 tmp_int;
+
+    // create sockaddr subtree
+    sockaddr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(sockaddr_item, "Sockaddr");
+    sockaddr_tree = proto_item_add_subtree(sockaddr_item, ett_sockaddr);
+
+    // try getting sockaddr object
+    if ((sockaddr_tok = json_get_object(json_data, arg_tok, "value")) == NULL) {
+        // couldn't get sockaddr object - try getting a null
+        DISSECTOR_ASSERT(json_get_null(json_data, arg_tok, "value"));
+        proto_item_append_text(sockaddr_item, ": (null)");
+        return;
+    }
+
+    // add sa_family
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sa_family")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
+    
+    // add sun_path
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sun_path")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
+    
+    // add sin_addr
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin_addr")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
+    
+    // add sin_port
+    if (json_get_int(json_data, sockaddr_tok, "sin_port", &tmp_int))
+        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin_port, tvb, 0, 0, (guint32)tmp_int);
+    
+    // add sin6_addr
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_addr")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
+    
+    // add sin6_port
+    if (json_get_int(json_data, sockaddr_tok, "sin6_port", &tmp_int))
+        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_port, tvb, 0, 0, (guint32)tmp_int);
+    
+    // add sin6_flowinfo
+    if (json_get_int(json_data, sockaddr_tok, "sin6_flowinfo", &tmp_int))
+        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, (guint32)tmp_int);
+    
+    // add sin6_scopeid
+    if (json_get_int(json_data, sockaddr_tok, "sin6_scopeid", &tmp_int))
+        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, (guint32)tmp_int);
+}
+
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
     const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token, gchar **arg_str, const gchar *event_name)
 {
@@ -660,6 +723,10 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     // triggered by
     else if (strcmp(arg_type, "unknown") == 0 && strcmp(hf->hfinfo.name, "triggeredBy") == 0)
         dissect_triggered_by(tvb, pinfo, tree, json_data, arg_token, event_name);
+    
+    // sockaddr
+    else if (strcmp(arg_type, "struct sockaddr*") == 0)
+        dissect_sockaddr(tvb, tree, json_data, arg_token);
 
     else
         return FALSE;
@@ -1009,10 +1076,11 @@ void proto_register_tracee(void)
         &ett_metadata,
         &ett_metadata_properties,
         &ett_args,
-        &ett_args_arr,
+        &ett_string_arr,
         &ett_process_lineage,
         &ett_process_lineage_process,
-        &ett_triggered_by
+        &ett_triggered_by,
+        &ett_sockaddr
     };
 
     static hf_register_info hf[] = {
@@ -1175,6 +1243,46 @@ void proto_register_tracee(void)
           { "Return Value", "tracee.triggered_by.return_value",
             FT_INT64, BASE_DEC, NULL, 0,
             "Return value of the event that triggered the signature", HFILL }
+        },
+        { &hf_sockaddr_sa_family,
+          { "sa_family", "tracee.sockaddr.sa_family",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Socket family", HFILL }
+        },
+        { &hf_sockaddr_sun_path,
+          { "sun_path", "tracee.sockaddr.sun_path",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Unix socket path", HFILL }
+        },
+        { &hf_sockaddr_sin_addr,
+          { "sin_addr", "tracee.sockaddr.sin_addr",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Socket IPv4 address", HFILL }
+        },
+        { &hf_sockaddr_sin_port,
+          { "sin_port", "tracee.sockaddr.sin_port",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Socket TCP/UDP port", HFILL }
+        },
+        { &hf_sockaddr_sin6_addr,
+          { "sin6_addr", "tracee.sockaddr.sin6_addr",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Socket IPv6 address", HFILL }
+        },
+        { &hf_sockaddr_sin6_port,
+          { "sin6_port", "tracee.sockaddr.sin6_port",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Socket TCP/UDP port", HFILL }
+        },
+        { &hf_sockaddr_sin6_flowinfo,
+          { "sin6_flowinfo", "tracee.sockaddr.sin6_flowinfo",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Socket IPv6 flow info", HFILL }
+        },
+        { &hf_sockaddr_sin6_scopeid,
+          { "sin6_scopeid", "tracee.sockaddr.sin6_scopeid",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Socket IPv6 scope id (new in RFC2553)", HFILL }
         },
         { &hf_metadata_version,
           { "Version", "tracee.metadata.Version",
