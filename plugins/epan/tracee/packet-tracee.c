@@ -642,7 +642,6 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     proto_tree *sockaddr_tree;
     jsmntok_t *sockaddr_tok;
     gchar *tmp_str;
-    gint64 tmp_int;
 
     // create sockaddr subtree
     sockaddr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
@@ -670,24 +669,24 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
         proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
     
     // add sin_port
-    if (json_get_int(json_data, sockaddr_tok, "sin_port", &tmp_int))
-        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin_port, tvb, 0, 0, (guint32)tmp_int);
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin_port")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
     
     // add sin6_addr
     if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_addr")) != NULL)
         proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
     
     // add sin6_port
-    if (json_get_int(json_data, sockaddr_tok, "sin6_port", &tmp_int))
-        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_port, tvb, 0, 0, (guint32)tmp_int);
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_port")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
     
     // add sin6_flowinfo
-    if (json_get_int(json_data, sockaddr_tok, "sin6_flowinfo", &tmp_int))
-        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, (guint32)tmp_int);
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_flowinfo")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, tmp_str);
     
     // add sin6_scopeid
-    if (json_get_int(json_data, sockaddr_tok, "sin6_scopeid", &tmp_int))
-        proto_tree_add_uint(sockaddr_tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, (guint32)tmp_int);
+    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_scopeid")) != NULL)
+        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
 }
 
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
@@ -1261,7 +1260,7 @@ void proto_register_tracee(void)
         },
         { &hf_sockaddr_sin_port,
           { "sin_port", "tracee.sockaddr.sin_port",
-            FT_UINT32, BASE_DEC, NULL, 0,
+            FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket TCP/UDP port", HFILL }
         },
         { &hf_sockaddr_sin6_addr,
@@ -1271,17 +1270,17 @@ void proto_register_tracee(void)
         },
         { &hf_sockaddr_sin6_port,
           { "sin6_port", "tracee.sockaddr.sin6_port",
-            FT_UINT32, BASE_DEC, NULL, 0,
+            FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket TCP/UDP port", HFILL }
         },
         { &hf_sockaddr_sin6_flowinfo,
           { "sin6_flowinfo", "tracee.sockaddr.sin6_flowinfo",
-            FT_UINT32, BASE_DEC, NULL, 0,
+            FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket IPv6 flow info", HFILL }
         },
         { &hf_sockaddr_sin6_scopeid,
           { "sin6_scopeid", "tracee.sockaddr.sin6_scopeid",
-            FT_UINT32, BASE_DEC, NULL, 0,
+            FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket IPv6 scope id (new in RFC2553)", HFILL }
         },
         { &hf_metadata_version,
