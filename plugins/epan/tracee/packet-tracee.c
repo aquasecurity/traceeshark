@@ -252,7 +252,8 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
         strcmp(type, "bytes")               == 0 ||
         strcmp(type, "void*")               == 0 ||
         strcmp(type, "const char*const*")   == 0 ||
-        strcmp(type, "const char**")        == 0) {
+        strcmp(type, "const char**")        == 0 ||
+        strcmp(type, "int*")                == 0) {
         
         info->type = FT_STRINGZ;
         info->display = BASE_NONE;
@@ -265,7 +266,9 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     }
 
     // u16
-    else if (strcmp(type, "umode_t") == 0) {
+    else if (strcmp(type, "umode_t")    == 0 ||
+             strcmp(type, "u16")        == 0) {
+        
         info->type = FT_UINT16;
         info->display = BASE_DEC;
     }
@@ -310,7 +313,10 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "trace.PktMeta")                      == 0 ||
              strcmp(type, "[]trace.DnsResponseData")            == 0 ||
              strcmp(type, "[]trace.DnsQueryData")               == 0 ||
-             strcmp(type, "trace.ProtoHTTPRequest")             == 0) {
+             strcmp(type, "trace.ProtoHTTPRequest")             == 0 ||
+             strcmp(type, "trace.ProtoTCP")                     == 0 ||
+             strcmp(type, "trace.ProtoHTTP")                    == 0 ||
+             strcmp(type, "trace.ProtoUDP")                     == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
