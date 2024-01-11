@@ -404,7 +404,7 @@ static gint new_dynamic_ett(void)
     return **dynamic_ett;
 }
 
-static void dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+static wmem_array_t *dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
     jsmntok_t *arr_tok, *elem_tok;
     gint dynamic_ett;
@@ -412,6 +412,7 @@ static void dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_in
     proto_item *arr_item, *tmp_item;
     int arr_len, i;
     gchar *str;
+    wmem_array_t *arr_data;
 
     // register a dynamic subtree for the array
     dynamic_ett = new_dynamic_ett();
@@ -429,10 +430,12 @@ static void dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_in
     // not an array - try getting a null
     else if (json_get_null(json_data, arg_tok, "value")) {
         proto_item_append_text(arr_item, ": (null)");
-        return;
+        return NULL;
     }
     else
         DISSECTOR_ASSERT_NOT_REACHED();
+    
+    arr_data = wmem_array_sized_new(wmem_packet_scope(), sizeof(gchar *), arr_len);
     
     // iterate through all elements
     for (i = 0; i < arr_len; i++) {
@@ -446,20 +449,41 @@ static void dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_in
         json_data[(elem_tok)->end] = '\0';
         str = &json_data[elem_tok->start];
         DISSECTOR_ASSERT(json_decode_string_inplace(str));
+        wmem_array_append_one(arr_data, str);
 
         // add the value to the dissection tree
         tmp_item = proto_tree_add_string(arr_tree, *(hf->p_id), tvb, 0, 0, str);
         proto_item_set_text(tmp_item, "%s[%d]: %s", hf->hfinfo.name, i, proto_item_get_display_repr(wmem_packet_scope(), tmp_item));
     }
+
+    return arr_data;
 }
 
-static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token)
+static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token, gchar **arg_str)
 {
+    wmem_array_t *arr;
+    int i, len;
+    gchar *str = NULL;
+
     // string array
     if (strcmp(arg_type, "const char*const*")   == 0 ||
-            strcmp(arg_type, "const char**")    == 0)
-        dissect_string_array(tvb, tree, hf, json_data, arg_token);
-    
+            strcmp(arg_type, "const char**")    == 0) {
+        if ((arr = dissect_string_array(tvb, tree, hf, json_data, arg_token)) != NULL) {
+            // argv array - add a field that displays all arguments together
+            if (strcmp(hf->hfinfo.name, "argv") == 0) {
+                len = wmem_array_get_count(arr);
+                for (i = 0; i < len; i++) {
+                    if (str == NULL)
+                        str = wmem_strdup(wmem_packet_scope(), *(gchar **)wmem_array_index(arr, i));
+                    else
+                        str = wmem_strdup_printf(wmem_packet_scope(), "%s %s", str, *(gchar **)wmem_array_index(arr, i));
+                }
+                proto_tree_add_string(tree, hf_args_argv, tvb, 0, 0, str);
+                *arg_str = str;
+            }
+        }
+    }
+
     else
         return FALSE;
     
@@ -502,79 +526,78 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
         hf = get_arg_hf(event_name, json_data, curr_arg);
 
         // try dissecting it as a complex type
-        if (dissect_complex_arg(tvb, args_tree, hf, arg_type, json_data, curr_arg))
-            continue;
-
-        // parse value according to type
-        switch (hf->hfinfo.type) {
-            // small signed integer types
-            case FT_INT8:
-            case FT_INT16:
-            case FT_INT32:
-                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
-                proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, val.s32);
-                arg_str = wmem_strdup_printf(pinfo->pool, "%d", val.s32);
-                break;
-            
-            // small unsigned integer types
-            case FT_UINT8:
-            case FT_UINT16:
-            case FT_UINT32:
-                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
-                proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
-                arg_str = wmem_strdup_printf(pinfo->pool, "%u", val.u32);
-                break;
-            
-            // large signed integer
-            case FT_INT64:
-                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
-                proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, val.s64);
-                arg_str = wmem_strdup_printf(pinfo->pool, "%" PRId64 , val.s64);
-                break;
-            
-            // large unsigned integer
-            case FT_UINT64:
-                DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
-                proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, val.u64);
-                arg_str = wmem_strdup_printf(pinfo->pool, "%" PRIu64 , val.u64);
-                break;
-            
-            // boolean
-            case FT_BOOLEAN:
-                DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &(val.boolean)));
-                proto_tree_add_boolean(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
-                arg_str = wmem_strdup_printf(pinfo->pool, "%s", val.boolean ? "true" : "false");
-                break;
-            
-            // string
-            case FT_STRINGZ:
-                // try reading a string
-                if ((val.str = json_get_string(json_data, curr_arg, "value")) != NULL) {
-                    proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, val.str);
-                    arg_str = val.str;
-                }
-                // no a string - try reading a null
-                else if (json_get_null(json_data, curr_arg, "value")) {
-                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "null");
-                        arg_str = "null";
-                }
-                // not a null - try reading a false
-                else {
-                    DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &val.boolean));
-                    DISSECTOR_ASSERT(val.boolean == false);
-                    proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "false");
-                    arg_str = "false";
-                }
-                break;
-            
-            // unsupported types
-            case FT_NONE:
-                tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
-                proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
-                break;
-            
-            default:
-                DISSECTOR_ASSERT_NOT_REACHED();
+        if (!dissect_complex_arg(tvb, args_tree, hf, arg_type, json_data, curr_arg, &arg_str)) {
+            // not a complex arg - parse value according to type
+            switch (hf->hfinfo.type) {
+                // small signed integer types
+                case FT_INT8:
+                case FT_INT16:
+                case FT_INT32:
+                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, val.s32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%d", val.s32);
+                    break;
+                
+                // small unsigned integer types
+                case FT_UINT8:
+                case FT_UINT16:
+                case FT_UINT32:
+                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%u", val.u32);
+                    break;
+                
+                // large signed integer
+                case FT_INT64:
+                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, val.s64);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRId64 , val.s64);
+                    break;
+                
+                // large unsigned integer
+                case FT_UINT64:
+                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, val.u64);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRIu64 , val.u64);
+                    break;
+                
+                // boolean
+                case FT_BOOLEAN:
+                    DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &(val.boolean)));
+                    proto_tree_add_boolean(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%s", val.boolean ? "true" : "false");
+                    break;
+                
+                // string
+                case FT_STRINGZ:
+                    // try reading a string
+                    if ((val.str = json_get_string(json_data, curr_arg, "value")) != NULL) {
+                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, val.str);
+                        arg_str = val.str;
+                    }
+                    // no a string - try reading a null
+                    else if (json_get_null(json_data, curr_arg, "value")) {
+                            proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "null");
+                            arg_str = "null";
+                    }
+                    // not a null - try reading a false
+                    else {
+                        DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &val.boolean));
+                        DISSECTOR_ASSERT(val.boolean == false);
+                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "false");
+                        arg_str = "false";
+                    }
+                    break;
+                
+                // unsupported types
+                case FT_NONE:
+                    tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
+                    proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
+                    break;
+                
+                default:
+                    DISSECTOR_ASSERT_NOT_REACHED();
+            }
         }
 
         // add argument to info column
@@ -915,7 +938,7 @@ void proto_register_tracee(void)
             "Originating syscall", HFILL }
         },
         { &hf_args_argv,
-          { "Argv", "tracee.args.argv",
+          { "Argv Line", "tracee.args.argv_line",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Process arguments", HFILL }
         },
