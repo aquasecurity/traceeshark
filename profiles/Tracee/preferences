@@ -9,8 +9,8 @@ gui.column.format:
 	"Container", "%Cus:tracee.container_col:0:R",
 	"PID", "%Cus:tracee.pid_col:0:R",
 	"TID", "%Cus:tracee.tid_col:0:R",
-	"Rval", "%Cus:tracee.returnValue:0:R",
 	"Process Name", "%Cus:tracee.processName:0:R",
+	"Rval", "%Cus:tracee.returnValue:0:R",
 	"Event", "%Cus:tracee.eventName:0:R",
 	"Originating Syscall", "%Cus:tracee.syscall:0:R",
 	"Info", "%i"
