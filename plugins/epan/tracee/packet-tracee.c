@@ -46,6 +46,13 @@ static int hf_syscall = -1;
 //static int hf_process_entity_id = -1;
 //static int parent_entity_id = -1;
 static int hf_args_argv = -1;
+static int hf_args_process_lineage_pid = -1;
+static int hf_args_process_lineage_ppid = -1;
+static int hf_args_process_lineage_start_time = -1;
+static int hf_args_process_lineage_process_name = -1;
+static int hf_args_process_lineage_pathname = -1;
+static int hf_args_process_lineage_sha256 = -1;
+static int hf_args_process_lineage_command = -1;
 static int hf_metadata_version = -1;
 static int hf_metadata_description = -1;
 //static int hf_metadata_tags = -1;
@@ -65,6 +72,9 @@ static gint ett_container = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
 static gint ett_args = -1;
+static gint ett_args_arr = -1;
+static gint ett_args_process_lineage = -1;
+static gint ett_args_process_lineage_process = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -395,32 +405,19 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     return hf;
 }
 
-static gint new_dynamic_ett(void)
-{
-    gint **dynamic_ett = wmem_new(wmem_file_scope(), gint *);
-    *dynamic_ett = wmem_new(wmem_file_scope(), gint);
-    **dynamic_ett = -1;
-    proto_register_subtree_array(dynamic_ett, 1);
-    return **dynamic_ett;
-}
-
 static wmem_array_t *dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
     jsmntok_t *arr_tok, *elem_tok;
-    gint dynamic_ett;
     proto_tree *arr_tree;
     proto_item *arr_item, *tmp_item;
     int arr_len, i;
     gchar *str;
     wmem_array_t *arr_data;
-
-    // register a dynamic subtree for the array
-    dynamic_ett = new_dynamic_ett();
     
     // create the subtree
     arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(arr_item, "%s", hf->hfinfo.name);
-    arr_tree = proto_item_add_subtree(arr_item, dynamic_ett);
+    arr_tree = proto_item_add_subtree(arr_item, ett_args_arr);
 
     // get array
     if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL) {
@@ -459,6 +456,91 @@ static wmem_array_t *dissect_string_array(tvbuff_t *tvb, proto_tree *tree, hf_re
     return arr_data;
 }
 
+static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok)
+{
+    proto_item *process_lineage_item, *process_item, *tmp_item;
+    proto_tree *process_lineage_tree, *process_tree;
+    jsmntok_t *arr_tok, *elem_tok;
+    int arr_len, i;
+    gint64 tmp_int;
+    gint32 pid, ppid;
+    nstime_t start_time;
+    gchar *process_name, *tmp_str;
+
+    // create process lineage subtree
+    process_lineage_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(process_lineage_item, "Process Lineage");
+    process_lineage_tree = proto_item_add_subtree(process_lineage_item, ett_args_process_lineage);
+
+    // get process lineage array
+    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL) {
+        DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
+        proto_item_append_text(process_lineage_item, ": %d entries", arr_len);
+    }
+    // not an array - try getting a null
+    else if (json_get_null(json_data, arg_tok, "value")) {
+        proto_item_append_text(process_lineage_item, ": (null)");
+        return;
+    }
+    else
+        DISSECTOR_ASSERT_NOT_REACHED();
+    
+    // iterate through all elements
+    for (i = 0; i < arr_len; i++) {
+        // get element
+        DISSECTOR_ASSERT((elem_tok = json_get_array_index(arr_tok, i)) != NULL);
+
+        // make sure it's an object
+        DISSECTOR_ASSERT(elem_tok->type == JSMN_OBJECT);
+        
+        // create process subtree
+        process_item = proto_tree_add_item(process_lineage_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+        proto_item_set_text(process_item, "Process");
+        process_tree = proto_item_add_subtree(process_item, ett_args_process_lineage_process);
+
+        // add pid
+        DISSECTOR_ASSERT(json_get_int(json_data, elem_tok, "PID", &tmp_int));
+        pid = (gint32)tmp_int;
+        proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, pid);
+
+        // add ppid
+        DISSECTOR_ASSERT(json_get_int(json_data, elem_tok, "PPID", &tmp_int));
+        ppid = (gint32)tmp_int;
+        proto_tree_add_int(process_tree, hf_args_process_lineage_ppid, tvb, 0, 0, ppid);
+
+        // add ppid as a hidden pid item so we can filter based on any pid in the process lineage
+        tmp_item = proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, ppid);
+        proto_item_set_hidden(tmp_item);
+
+        // add start time
+        DISSECTOR_ASSERT(json_get_int(json_data, elem_tok, "StartTime", &tmp_int));
+        start_time.secs = (guint64)tmp_int / 1000000000;
+        start_time.nsecs = (guint64)tmp_int % 1000000000;
+        proto_tree_add_time(process_tree, hf_args_process_lineage_start_time, tvb, 0, 0, &start_time);
+
+        // add process name
+        DISSECTOR_ASSERT((process_name = json_get_string(json_data, elem_tok, "ProcessName")) != NULL);
+        proto_tree_add_string(process_tree, hf_args_process_lineage_process_name, tvb, 0, 0, process_name);
+
+        // add pathname
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, elem_tok, "Pathname")) != NULL);
+        proto_tree_add_string(process_tree, hf_args_process_lineage_pathname, tvb, 0, 0, tmp_str);
+
+        // add sha256
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, elem_tok, "SHA256")) != NULL);
+        proto_tree_add_string(process_tree, hf_args_process_lineage_sha256, tvb, 0, 0, tmp_str);
+
+        // add command
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, elem_tok, "Command")) != NULL);
+        proto_tree_add_string(process_tree, hf_args_process_lineage_command, tvb, 0, 0, tmp_str);
+
+        // set process item text
+        proto_item_set_text(process_item, "%d -> %d", ppid, pid);
+        if (strlen(process_name) > 0)
+            proto_item_append_text(process_item, " (%s)", process_name);
+    }
+}
+
 static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token, gchar **arg_str)
 {
     wmem_array_t *arr;
@@ -483,6 +565,10 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register
             }
         }
     }
+
+    // process lineage
+    else if (strcmp(arg_type, "unknown") == 0 && strcmp(hf->hfinfo.name, "Process lineage") == 0)
+        dissect_process_lineage(tvb, tree, json_data, arg_token);
 
     else
         return FALSE;
@@ -685,7 +771,8 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     int num_tokens;
     jsmntok_t *root_token;
     gint64 tmp_int;
-    pid_t pid, host_pid, tid, host_tid;
+    nstime_t timestamp;
+    gint32 pid, host_pid, tid, host_tid;
     gchar *event_name, *process_name, *syscall, *tmp_str, *pid_col_str = NULL, *tid_col_str = NULL;
     proto_item *metadata_item, *args_item, *tmp_item;
 
@@ -698,16 +785,18 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     
     // add timestamp
     DISSECTOR_ASSERT(json_get_int(json_data, root_token, "timestamp", &tmp_int));
-    proto_tree_add_uint64(tree, hf_timestamp, tvb, 0, 0, (guint64)tmp_int);
+    timestamp.secs = (guint64)tmp_int / 1000000000;
+    timestamp.nsecs = (guint64)tmp_int % 1000000000;
+    proto_tree_add_time(tree, hf_timestamp, tvb, 0, 0, &timestamp);
 
     // add process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_token, "processId", &tmp_int));
-    pid = (pid_t)tmp_int;
+    pid = (gint32)tmp_int;
     proto_tree_add_int(tree, hf_process_id, tvb, 0, 0, pid);
 
     // add thread ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_token, "threadId", &tmp_int));
-    tid = (pid_t)tmp_int;
+    tid = (gint32)tmp_int;
     proto_tree_add_int(tree, hf_thread_id, tvb, 0, 0, tid);        
 
     // add parent process ID
@@ -716,7 +805,7 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
     // add host process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_token, "hostProcessId", &tmp_int));
-    host_pid = (pid_t)tmp_int;
+    host_pid = (gint32)tmp_int;
     proto_tree_add_int(tree, hf_host_process_id, tvb, 0, 0, host_pid);
 
     // add PID column
@@ -730,7 +819,7 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
     // add host thread ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_token, "hostThreadId", &tmp_int));
-    host_tid = (pid_t)tmp_int;
+    host_tid = (gint32)tmp_int;
     proto_tree_add_int(tree, hf_host_thread_id, tvb, 0, 0, host_tid);
 
     // add TID column
@@ -828,13 +917,16 @@ void proto_register_tracee(void)
         &ett_container,
         &ett_metadata,
         &ett_metadata_properties,
-        &ett_args
+        &ett_args,
+        &ett_args_arr,
+        &ett_args_process_lineage,
+        &ett_args_process_lineage_process
     };
 
     static hf_register_info hf[] = {
         { &hf_timestamp,
           { "Timestamp", "tracee.timestamp",
-            FT_UINT64, BASE_DEC, NULL, 0,
+            FT_ABSOLUTE_TIME, ABSOLUTE_TIME_UTC, NULL, 0,
             NULL, HFILL }
         },
         { &hf_process_id,
@@ -942,6 +1034,41 @@ void proto_register_tracee(void)
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Process arguments", HFILL }
         },
+        { &hf_args_process_lineage_pid,
+          { "PID", "tracee.process_lineage.pid",
+            FT_INT32, BASE_DEC, NULL, 0,
+            "Process ID (in root PID namespace, a.k.a host)", HFILL }
+        },
+        { &hf_args_process_lineage_ppid,
+          { "PPID", "tracee.process_lineage.ppid",
+            FT_INT32, BASE_DEC, NULL, 0,
+            "Parent process ID (in root PID namespace, a.k.a host)", HFILL }
+        },
+        { &hf_args_process_lineage_start_time,
+          { "Start Time", "tracee.process_lineage.start_time",
+            FT_ABSOLUTE_TIME, ABSOLUTE_TIME_UTC, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_args_process_lineage_process_name,
+          { "Process Name", "tracee.process_lineage.process_name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_args_process_lineage_pathname,
+          { "Pathname", "tracee.process_lineage.pathname",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Process executable path", HFILL }
+        },
+        { &hf_args_process_lineage_sha256,
+          { "SHA256", "tracee.process_lineage.sha256",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "SHA256 hash of the process executable", HFILL }
+        },
+        { &hf_args_process_lineage_command,
+          { "Command", "tracee.process_lineage.command",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Process command line", HFILL }
+        },
         { &hf_metadata_version,
           { "Version", "tracee.metadata.Version",
             FT_STRINGZ, BASE_NONE, NULL, 0,
@@ -1019,6 +1146,6 @@ void proto_reg_handoff_tracee(void)
 
     tracee_json_handle = create_dissector_handle(dissect_tracee_json, proto_tracee);
     
-    // register to event type dissector table
+    // register to encapsulation dissector table (we use a user-reserved encapsulation)
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);
 }

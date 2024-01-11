@@ -2,3 +2,5 @@
 "Process name" tracee.processName == "bash"
 "Container image" tracee.container.image == "ubuntu:latest"
 "Syscall" tracee.syscall == "execve"
+"PID in process lineage" tracee.process_lineage.pid == 1234
+"Process name in process lineage" tracee.process_lineage.process_name == "bash"
