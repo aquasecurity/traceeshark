@@ -462,10 +462,18 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
     proto_tree *process_lineage_tree, *process_tree;
     jsmntok_t *arr_tok, *elem_tok;
     int arr_len, i;
+    wmem_array_t *process_arr;
+    struct process_info {
+        gint32 pid;
+        gint32 ppid;
+        gchar *name;
+    } process_info;
     gint64 tmp_int;
-    gint32 pid, ppid;
     nstime_t start_time;
-    gchar *process_name, *tmp_str;
+    gchar *tmp_str, *process_lineage_desc = NULL;
+    struct process_info *process_info_ptr;
+    gint32 prev_pid = 0;
+    gboolean process_lineage_intact = TRUE;
 
     // create process lineage subtree
     process_lineage_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
@@ -473,10 +481,9 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
     process_lineage_tree = proto_item_add_subtree(process_lineage_item, ett_args_process_lineage);
 
     // get process lineage array
-    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL) {
+    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL)
         DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
-        proto_item_append_text(process_lineage_item, ": %d entries", arr_len);
-    }
+    
     // not an array - try getting a null
     else if (json_get_null(json_data, arg_tok, "value")) {
         proto_item_append_text(process_lineage_item, ": (null)");
@@ -484,6 +491,9 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
     }
     else
         DISSECTOR_ASSERT_NOT_REACHED();
+    
+    // save an array of processes in the process lineage
+    process_arr = wmem_array_sized_new(wmem_packet_scope(), sizeof(struct process_info), arr_len);
     
     // iterate through all elements
     for (i = 0; i < arr_len; i++) {
@@ -500,16 +510,16 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
 
         // add pid
         DISSECTOR_ASSERT(json_get_int(json_data, elem_tok, "PID", &tmp_int));
-        pid = (gint32)tmp_int;
-        proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, pid);
+        process_info.pid = (gint32)tmp_int;
+        proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, process_info.pid);
 
         // add ppid
         DISSECTOR_ASSERT(json_get_int(json_data, elem_tok, "PPID", &tmp_int));
-        ppid = (gint32)tmp_int;
-        proto_tree_add_int(process_tree, hf_args_process_lineage_ppid, tvb, 0, 0, ppid);
+        process_info.ppid = (gint32)tmp_int;
+        proto_tree_add_int(process_tree, hf_args_process_lineage_ppid, tvb, 0, 0, process_info.ppid);
 
         // add ppid as a hidden pid item so we can filter based on any pid in the process lineage
-        tmp_item = proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, ppid);
+        tmp_item = proto_tree_add_int(process_tree, hf_args_process_lineage_pid, tvb, 0, 0, process_info.ppid);
         proto_item_set_hidden(tmp_item);
 
         // add start time
@@ -519,8 +529,8 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
         proto_tree_add_time(process_tree, hf_args_process_lineage_start_time, tvb, 0, 0, &start_time);
 
         // add process name
-        DISSECTOR_ASSERT((process_name = json_get_string(json_data, elem_tok, "ProcessName")) != NULL);
-        proto_tree_add_string(process_tree, hf_args_process_lineage_process_name, tvb, 0, 0, process_name);
+        DISSECTOR_ASSERT((process_info.name = json_get_string(json_data, elem_tok, "ProcessName")) != NULL);
+        proto_tree_add_string(process_tree, hf_args_process_lineage_process_name, tvb, 0, 0, process_info.name);
 
         // add pathname
         DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, elem_tok, "Pathname")) != NULL);
@@ -535,10 +545,46 @@ static void dissect_process_lineage(tvbuff_t *tvb, proto_tree *tree, gchar *json
         proto_tree_add_string(process_tree, hf_args_process_lineage_command, tvb, 0, 0, tmp_str);
 
         // set process item text
-        proto_item_set_text(process_item, "%d -> %d", ppid, pid);
-        if (strlen(process_name) > 0)
-            proto_item_append_text(process_item, " (%s)", process_name);
+        proto_item_set_text(process_item, "%d -> %d", process_info.ppid, process_info.pid);
+        if (strlen(process_info.name) > 0)
+            proto_item_append_text(process_item, " (%s)", process_info.name);
+        
+        // add process to process array
+        wmem_array_append_one(process_arr, process_info);
     }
+
+    // traverse process array backwards and build process lineage description string
+    for (i = arr_len - 1; i >= 0; i--) {
+        process_info_ptr = (struct process_info *)wmem_array_index(process_arr, i);
+
+        // first iteration - initialize description string
+        if (prev_pid == 0)
+            process_lineage_desc = wmem_strdup_printf(wmem_packet_scope(), "%d", process_info_ptr->ppid);
+        
+        // make sure the ppid of this process is the pid of the last process
+        else {
+            if (process_info_ptr->ppid != prev_pid) {
+                process_lineage_intact = FALSE;
+                break;
+            }
+        }
+        prev_pid = process_info_ptr->pid;
+
+        // add this process to the process lineage description
+        process_lineage_desc = wmem_strdup_printf(wmem_packet_scope(), "%s -> %d", process_lineage_desc, process_info_ptr->pid);
+        if (strlen(process_info_ptr->name) > 0)
+            process_lineage_desc = wmem_strdup_printf(wmem_packet_scope(), "%s (%s)", process_lineage_desc, process_info_ptr->name);
+    }
+
+    // process lineage intact - add description to process lineage item
+    if (process_lineage_intact && process_lineage_desc != NULL)
+        proto_item_append_text(process_lineage_item, ": %s", process_lineage_desc);
+    // process lineage not intact
+    else if (!process_lineage_intact)
+        proto_item_append_text(process_lineage_item, ": (not intact!)");
+    // no description (empty process lineage)
+    else
+        proto_item_append_text(process_lineage_item, ": %d entries", arr_len);
 }
 
 static gboolean dissect_complex_arg(tvbuff_t *tvb, proto_tree *tree, hf_register_info *hf, const gchar *arg_type, gchar *json_data, jsmntok_t *arg_token, gchar **arg_str)
