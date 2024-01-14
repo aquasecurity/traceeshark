@@ -154,7 +154,7 @@ static bool json_get_int(char *buf, jsmntok_t *parent, const char *name, gint64 
             cur->size == 1 && (cur+1)->type == JSMN_PRIMITIVE) {
             buf[(cur+1)->end] = '\0';
             errno = 0; // for some reason we have to clear errno manually, because it has an unrelated error stuck which isn't cleared
-            *val = g_ascii_strtoll(&buf[(cur+1)->start], NULL, 10);
+            *val = strtoll(&buf[(cur+1)->start], NULL, 10);
             if (errno != 0)
                 return false;
             return true;
@@ -190,6 +190,12 @@ bool json_get_null(char *buf, jsmntok_t *parent, const char *name)
         cur = json_get_next_object(cur);
     }
     return false;
+}
+
+static bool json_get_int_or_null(char *buf, jsmntok_t *parent, const char *name, gint64 *val)
+{
+    return json_get_int(buf, parent, name, val) ? true : json_get_null(buf, parent, name);
+    
 }
 
 static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
@@ -794,7 +800,7 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                 case FT_INT8:
                 case FT_INT16:
                 case FT_INT32:
-                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
                     proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, val.s32);
                     arg_str = wmem_strdup_printf(pinfo->pool, "%d", val.s32);
                     break;
@@ -803,21 +809,21 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                 case FT_UINT8:
                 case FT_UINT16:
                 case FT_UINT32:
-                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
                     proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
                     arg_str = wmem_strdup_printf(pinfo->pool, "%u", val.u32);
                     break;
                 
                 // large signed integer
                 case FT_INT64:
-                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
                     proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, val.s64);
                     arg_str = wmem_strdup_printf(pinfo->pool, "%" PRId64 , val.s64);
                     break;
                 
                 // large unsigned integer
                 case FT_UINT64:
-                    DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &(val.s64)));
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
                     proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, val.u64);
                     arg_str = wmem_strdup_printf(pinfo->pool, "%" PRIu64 , val.u64);
                     break;
