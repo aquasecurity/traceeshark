@@ -63,6 +63,21 @@ static int hf_sockaddr_sin6_addr = -1;
 static int hf_sockaddr_sin6_port = -1;
 static int hf_sockaddr_sin6_flowinfo = -1;
 static int hf_sockaddr_sin6_scopeid = -1;
+static int hf_slim_cred_t_uid = -1;
+static int hf_slim_cred_t_gid = -1;
+static int hf_slim_cred_t_suid = -1;
+static int hf_slim_cred_t_sgid = -1;
+static int hf_slim_cred_t_euid = -1;
+static int hf_slim_cred_t_egid = -1;
+static int hf_slim_cred_t_fsuid = -1;
+static int hf_slim_cred_t_fsgid = -1;
+static int hf_slim_cred_t_user_namespace = -1;
+static int hf_slim_cred_t_secure_bits = -1;
+static int hf_slim_cred_t_cap_inheritable = -1;
+static int hf_slim_cred_t_cap_permitted = -1;
+static int hf_slim_cred_t_cap_effective = -1;
+static int hf_slim_cred_t_cap_bounding = -1;
+static int hf_slim_cred_t_cap_ambient = -1;
 static int hf_metadata_version = -1;
 static int hf_metadata_description = -1;
 //static int hf_metadata_tags = -1;
@@ -86,7 +101,7 @@ static gint ett_string_arr = -1;
 static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
 static gint ett_triggered_by = -1;
-static gint ett_sockaddr = -1;
+static gint ett_arg_obj = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -661,57 +676,131 @@ static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_return_value, tvb, 0, 0, tmp_int);
 }
 
-static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok)
+typedef void (*object_dissector_t) (tvbuff_t*, proto_tree*, gchar*, jsmntok_t*);
+
+static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok, const gchar *arg_name, object_dissector_t dissector)
 {
-    proto_item *sockaddr_item;
-    proto_tree *sockaddr_tree;
-    jsmntok_t *sockaddr_tok;
-    gchar *tmp_str;
+    proto_item *obj_item;
+    proto_tree *obj_tree;
+    jsmntok_t *obj_tok;
 
-    // create sockaddr subtree
-    sockaddr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
-    proto_item_set_text(sockaddr_item, "Sockaddr");
-    sockaddr_tree = proto_item_add_subtree(sockaddr_item, ett_sockaddr);
+    // create object subtree
+    obj_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(obj_item, "%s", arg_name);
+    obj_tree = proto_item_add_subtree(obj_item, ett_arg_obj);
 
-    // try getting sockaddr object
-    if ((sockaddr_tok = json_get_object(json_data, arg_tok, "value")) == NULL) {
-        // couldn't get sockaddr object - try getting a null
+    // try getting object
+    if ((obj_tok = json_get_object(json_data, arg_tok, "value")) == NULL) {
+        // couldn't get object - try getting a null
         DISSECTOR_ASSERT(json_get_null(json_data, arg_tok, "value"));
-        proto_item_append_text(sockaddr_item, ": (null)");
+        proto_item_append_text(obj_item, ": (null)");
         return;
     }
 
+    // call dissector for this object
+    dissector(tvb, obj_tree, json_data, obj_tok);
+}
+
+static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gchar *tmp_str;
+
     // add sa_family
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sa_family")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
     
     // add sun_path
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sun_path")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sun_path")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
     
     // add sin_addr
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin_addr")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_addr")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
     
     // add sin_port
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin_port")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
     
     // add sin6_addr
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_addr")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_addr")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
     
     // add sin6_port
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_port")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
     
     // add sin6_flowinfo
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_flowinfo")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_flowinfo")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, tmp_str);
     
     // add sin6_scopeid
-    if ((tmp_str = json_get_string(json_data, sockaddr_tok, "sin6_scopeid")) != NULL)
-        proto_tree_add_string(sockaddr_tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_scopeid")) != NULL)
+        proto_tree_add_string(tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
+}
+
+static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gint64 tmp_int;
+
+    // add uid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Uid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_uid, tvb, 0, 0, tmp_int);
+
+    // add gid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Gid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_gid, tvb, 0, 0, tmp_int);
+
+    // add suid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Suid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_suid, tvb, 0, 0, tmp_int);
+
+    // add sgid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Sgid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_sgid, tvb, 0, 0, tmp_int);
+
+    // add euid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Euid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_euid, tvb, 0, 0, tmp_int);
+
+    // add egid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Egid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_egid, tvb, 0, 0, tmp_int);
+
+    // add fsuid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Fsuid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_fsuid, tvb, 0, 0, tmp_int);
+
+    // add fsgid
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "Fsgid", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_fsgid, tvb, 0, 0, tmp_int);
+
+    // add user namespace
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "UserNamespace", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_user_namespace, tvb, 0, 0, tmp_int);
+
+    // add secure bits
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "SecureBits", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_secure_bits, tvb, 0, 0, tmp_int);
+
+    // add capinh
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "CapInheritable", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_cap_inheritable, tvb, 0, 0, tmp_int);
+
+    // add capprm
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "CapPermitted", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_cap_permitted, tvb, 0, 0, tmp_int);
+
+    // add capeff
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "CapEffective", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_cap_effective, tvb, 0, 0, tmp_int);
+
+    // add capbnd
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "CapBounding", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_cap_bounding, tvb, 0, 0, tmp_int);
+
+    // add capamb
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "CapAmbient", &tmp_int));
+    proto_tree_add_int64(tree, hf_slim_cred_t_cap_ambient, tvb, 0, 0, tmp_int);
 }
 
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
@@ -750,7 +839,11 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     
     // sockaddr
     else if (strcmp(arg_type, "struct sockaddr*") == 0)
-        dissect_sockaddr(tvb, tree, json_data, arg_tok);
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_sockaddr);
+    
+    // slim_cred_t
+    else if (strcmp(arg_type, "slim_cred_t") == 0)
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_slim_cred_t);
 
     else
         return FALSE;
@@ -859,6 +952,7 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                 
                 // unsupported types
                 case FT_NONE:
+                    ws_info("cannot dissect unsupported type \"%s\"", arg_type);
                     tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
                     proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
                     break;
@@ -1174,7 +1268,7 @@ void proto_register_tracee(void)
         &ett_process_lineage,
         &ett_process_lineage_process,
         &ett_triggered_by,
-        &ett_sockaddr
+        &ett_arg_obj
     };
 
     static hf_register_info hf[] = {
@@ -1447,6 +1541,81 @@ void proto_register_tracee(void)
           { "sin6_scopeid", "tracee.sockaddr.sin6_scopeid",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket IPv6 scope id (new in RFC2553)", HFILL }
+        },
+        { &hf_slim_cred_t_uid,
+          { "UID", "tracee.slim_cred_t.uid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Real user ID", HFILL }
+        },
+        { &hf_slim_cred_t_gid,
+          { "GID", "tracee.slim_cred_t.gid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Real group ID", HFILL }
+        },
+        { &hf_slim_cred_t_suid,
+          { "SUID", "tracee.slim_cred_t.suid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Saved user ID", HFILL }
+        },
+        { &hf_slim_cred_t_sgid,
+          { "SGID", "tracee.slim_cred_t.sgid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Saved group ID", HFILL }
+        },
+        { &hf_slim_cred_t_euid,
+          { "EUID", "tracee.slim_cred_t.euid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Effective user ID", HFILL }
+        },
+        { &hf_slim_cred_t_egid,
+          { "EGID", "tracee.slim_cred_t.egid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Effective group ID", HFILL }
+        },
+        { &hf_slim_cred_t_fsuid,
+          { "FSUID", "tracee.slim_cred_t.fsuid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "User ID for VFS operations", HFILL }
+        },
+        { &hf_slim_cred_t_fsgid,
+          { "FSGID", "tracee.slim_cred_t.fsgid",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Group ID for VFS operations", HFILL }
+        },
+        { &hf_slim_cred_t_user_namespace,
+          { "User Namespace", "tracee.slim_cred_t.user_namespace",
+            FT_INT64, BASE_DEC, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_slim_cred_t_secure_bits,
+          { "Secure Bits", "tracee.slim_cred_t.secure_bits",
+            FT_INT64, BASE_DEC, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_slim_cred_t_cap_inheritable,
+          { "CapInh", "tracee.slim_cred_t.cap_inheritable",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Inheritable capabilities", HFILL }
+        },
+        { &hf_slim_cred_t_cap_permitted,
+          { "CapPrm", "tracee.slim_cred_t.cap_permitted",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Permitted capabilities", HFILL }
+        },
+        { &hf_slim_cred_t_cap_effective,
+          { "CapEff", "tracee.slim_cred_t.cap_effective",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Effective capabilities", HFILL }
+        },
+        { &hf_slim_cred_t_cap_bounding,
+          { "CapBnd", "tracee.slim_cred_t.cap_bounding",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Bounding capabilities", HFILL }
+        },
+        { &hf_slim_cred_t_cap_ambient,
+          { "CapAmb", "tracee.slim_cred_t.cap_ambient",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "Ambient capabilities", HFILL }
         },
         { &hf_metadata_version,
           { "Version", "tracee.metadata.Version",
