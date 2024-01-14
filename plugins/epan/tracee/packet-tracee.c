@@ -306,8 +306,9 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     }
 
     // u32
-    else if (strcmp(type, "dev_t")  == 0 ||
-             strcmp(type, "u32")    == 0) {
+    else if (strcmp(type, "dev_t")          == 0 ||
+             strcmp(type, "u32")            == 0 ||
+             strcmp(type, "unsigned int")   == 0) {
         
         info->type = FT_UINT32;
         info->display = BASE_DEC;
@@ -339,7 +340,10 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "trace.ProtoHTTPRequest")             == 0 ||
              strcmp(type, "trace.ProtoTCP")                     == 0 ||
              strcmp(type, "trace.ProtoHTTP")                    == 0 ||
-             strcmp(type, "trace.ProtoUDP")                     == 0) {
+             strcmp(type, "trace.ProtoUDP")                     == 0 ||
+             strcmp(type, "[]trace.HookedSymbolData")           == 0 ||
+             strcmp(type, "struct file_operations *")           == 0 ||
+             strcmp(type, "const struct iovec*")                == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
