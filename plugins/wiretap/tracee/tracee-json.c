@@ -291,16 +291,3 @@ wtap_register_tracee_json(void)
 
     tracee_json_file_type_subtype = wtap_register_file_type_subtype(&tracee_json_info);
 }
-
-/*
- * Editor modelines  -  https://www.wireshark.org/tools/modelines.html
- *
- * Local variables:
- * c-basic-offset: 4
- * tab-width: 8
- * indent-tabs-mode: nil
- * End:
- *
- * vi: set shiftwidth=4 tabstop=8 expandtab:
- * :indentSize=4:tabSize=8:noTabs=true:
- */
