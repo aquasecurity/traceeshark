@@ -16,6 +16,7 @@ static int hf_parent_process_id = -1;
 static int hf_host_process_id = -1;
 static int hf_pid_col = -1;
 static int hf_tid_col = -1;
+static int hf_ppid_col = -1;
 static int hf_host_thread_id = -1;
 static int hf_host_parent_process_id = -1;
 static int hf_user_id = -1;
@@ -957,8 +958,8 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     jsmntok_t *root_tok, *tmp_tok;
     gint64 tmp_int;
     nstime_t timestamp;
-    gint32 pid, host_pid, tid, host_tid;
-    gchar *event_name, *process_name, *syscall, *tmp_str, *pid_col_str = NULL, *tid_col_str = NULL;
+    gint32 pid, host_pid, tid, host_tid, ppid, host_ppid;
+    gchar *event_name, *process_name, *syscall, *tmp_str, *pid_col_str = NULL, *tid_col_str = NULL, *ppid_col_str = NULL;
     proto_item *metadata_item, *args_item, *tmp_item;
 
     num_toks = json_parse(json_data, NULL, 0);
@@ -1000,7 +1001,8 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
     // add parent process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentProcessId", &tmp_int));
-    proto_tree_add_int(tree, hf_parent_process_id, tvb, 0, 0, (gint)tmp_int);
+    ppid = (gint32)tmp_int;
+    proto_tree_add_int(tree, hf_parent_process_id, tvb, 0, 0, ppid);
 
     // add host process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostProcessId", &tmp_int));
@@ -1032,7 +1034,17 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
     // add host parent process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostParentProcessId", &tmp_int));
-    proto_tree_add_int(tree, hf_host_parent_process_id, tvb, 0, 0, (gint)tmp_int);
+    host_ppid = (gint32)tmp_int;
+    proto_tree_add_int(tree, hf_host_parent_process_id, tvb, 0, 0, host_ppid);
+
+    // add PPID column
+    if (ppid != 0) {
+        ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
+        if (ppid != host_ppid)
+            ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, host_ppid);
+        tmp_item = proto_tree_add_string(tree, hf_ppid_col, tvb, 0, 0, ppid_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
 
     // add user ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "userId", &tmp_int));
@@ -1213,6 +1225,11 @@ void proto_register_tracee(void)
         },
         { &hf_tid_col,
           { "TID Column", "tracee.tid_col",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ppid_col,
+          { "PPID Column", "tracee.ppid_col",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
