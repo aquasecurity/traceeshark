@@ -1097,7 +1097,10 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     dissect_container_fields(tvb, pinfo, tree, json_data, root_tok);
 
     // add event ID
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "eventId")) != NULL);
+    if ((tmp_str = json_get_string(json_data, root_tok, "eventId")) == NULL) {
+        DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "eventId", &tmp_int));
+        tmp_str = wmem_strdup_printf(pinfo->pool, "%" PRId64, tmp_int);
+    }
     proto_tree_add_string(tree, hf_event_id, tvb, 0, 0, tmp_str);
 
     // add event name
