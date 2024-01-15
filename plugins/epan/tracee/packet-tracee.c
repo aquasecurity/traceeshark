@@ -72,11 +72,19 @@ static int hf_metadata_properties_signature_id = -1;
 static int hf_metadata_properties_signature_name = -1;
 
 // network fields
-/*static int hf_ip_addr = -1;
+static int hf_ip_addr = -1;
 static int hf_ip_src = -1;
 static int hf_ip_dst = -1;
-static int hf_ipproto = -1;
-static int hf_*/
+static int hf_ipv6_addr = -1;
+static int hf_ipv6_src = -1;
+static int hf_ipv6_dst = -1;
+static int hf_ip_proto = -1;
+static int hf_tcp_port = -1;
+static int hf_tcp_srcport = -1;
+static int hf_tcp_dstport = -1;
+static int hf_udp_port = -1;
+static int hf_udp_srcport = -1;
+static int hf_udp_dstport = -1;
 
 // sockaddr fields
 static int hf_sockaddr_sa_family = -1;
@@ -113,6 +121,7 @@ static int hf_pktmeta_dst_port = -1;
 static int hf_pktmeta_protocol = -1;
 static int hf_pktmeta_packet_len = -1;
 static int hf_pktmeta_iface = -1;
+
 static gint ett_tracee = -1;
 static gint ett_container = -1;
 static gint ett_metadata = -1;
@@ -666,6 +675,10 @@ static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data
 static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     gchar *tmp_str;
+    proto_item *tmp_item;
+    ws_in4_addr in4_addr;
+    ws_in6_addr in6_addr;
+    gint64 tmp_int;
 
     // add sa_family
     if ((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL) {
@@ -681,20 +694,78 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
         proto_tree_add_string(tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
     
     // add sin_addr
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_addr")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_addr")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
+        DISSECTOR_ASSERT(ws_inet_pton4(tmp_str, &in4_addr));
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+
+        // add address as both src and dst because we don't know which it is
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_src, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_dst, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+    }
     
     // add sin_port
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
+        tmp_int = strtoll(tmp_str, NULL, 10);
+        DISSECTOR_ASSERT(errno == 0);
+
+        // add port as both tcp and udp and bot src and dst because we don't know which it is
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_port, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_srcport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_dstport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_port, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_srcport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_dstport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+    }
     
     // add sin6_addr
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_addr")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_addr")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
+        if (ws_inet_pton6(tmp_str, &in6_addr)) {
+            tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_addr, tvb, 0, 0, &in6_addr);
+            proto_item_set_hidden(tmp_item);
+
+            // add address as both src and dst because we don't know which it is
+            tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_src, tvb, 0, 0, &in6_addr);
+            proto_item_set_hidden(tmp_item);
+            tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_dst, tvb, 0, 0, &in6_addr);
+            proto_item_set_hidden(tmp_item);
+        }
+        // sometimes and IPv4 address appears in the sin6_addr field, ignore these
+        else
+            ws_info("error decoding ipv6 addr %s", tmp_str);
+    }
     
     // add sin6_port
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
+        tmp_int = strtoll(tmp_str, NULL, 10);
+        DISSECTOR_ASSERT(errno == 0);
+
+        // add port as both tcp and udp and bot src and dst because we don't know which it is
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_port, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_srcport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_dstport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_port, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_srcport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_dstport, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+    }
     
     // add sin6_flowinfo
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_flowinfo")) != NULL)
@@ -776,34 +847,81 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     gchar *tmp_str;
     ws_in4_addr in4_addr;
     ws_in6_addr in6_addr;
+    proto_item *tmp_item;
+    guint32 src_port, dst_port;
 
     // add src ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
-    if (ws_inet_pton4(tmp_str, &in4_addr))
+    if (ws_inet_pton4(tmp_str, &in4_addr)) {
         add_network_filter(tvb, tree, "ip");
-    else if (ws_inet_pton6(tmp_str, &in6_addr))
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_src, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+    }
+    else if (ws_inet_pton6(tmp_str, &in6_addr)) {
         add_network_filter(tvb, tree, "ipv6");
+        tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_addr, tvb, 0, 0, &in6_addr);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_src, tvb, 0, 0, &in6_addr);
+        proto_item_set_hidden(tmp_item);
+    }
     
     // add dst ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
+    if (ws_inet_pton4(tmp_str, &in4_addr)) {
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_ipv4(tree, hf_ip_dst, tvb, 0, 0, in4_addr);
+        proto_item_set_hidden(tmp_item);
+    }
+    else if (ws_inet_pton6(tmp_str, &in6_addr)) {
+        add_network_filter(tvb, tree, "ipv6");
+        tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_addr, tvb, 0, 0, &in6_addr);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_dst, tvb, 0, 0, &in6_addr);
+        proto_item_set_hidden(tmp_item);
+    }
     
     // add src port
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "src_port", &tmp_int));
-    proto_tree_add_uint(tree, hf_pktmeta_src_port, tvb, 0, 0, (guint32)tmp_int);
+    src_port = (guint32)tmp_int;
+    proto_tree_add_uint(tree, hf_pktmeta_src_port, tvb, 0, 0, src_port);
 
     // add dst port
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "dst_port", &tmp_int));
-    proto_tree_add_uint(tree, hf_pktmeta_dst_port, tvb, 0, 0, (guint32)tmp_int);
+    dst_port = (guint32)tmp_int;
+    proto_tree_add_uint(tree, hf_pktmeta_dst_port, tvb, 0, 0, dst_port);
 
     // add protocol
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "protocol", &tmp_int));
     proto_tree_add_uint(tree, hf_pktmeta_protocol, tvb, 0, 0, (guint32)tmp_int);
-    if (tmp_int == IP_PROTO_TCP)
+    tmp_item = proto_tree_add_uint(tree, hf_ip_proto, tvb, 0, 0, (guint8)tmp_int);
+    proto_item_set_hidden(tmp_item);
+    if (tmp_int == IP_PROTO_TCP) {
         add_network_filter(tvb, tree, "tcp");
-    else if (tmp_int == IP_PROTO_UDP)
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_port, tvb, 0, 0, src_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_port, tvb, 0, 0, dst_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_srcport, tvb, 0, 0, src_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_tcp_dstport, tvb, 0, 0, dst_port);
+        proto_item_set_hidden(tmp_item);
+    }
+    else if (tmp_int == IP_PROTO_UDP) {
         add_network_filter(tvb, tree, "udp");
+        tmp_item = proto_tree_add_uint(tree, hf_udp_port, tvb, 0, 0, src_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_port, tvb, 0, 0, dst_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_srcport, tvb, 0, 0, src_port);
+        proto_item_set_hidden(tmp_item);
+        tmp_item = proto_tree_add_uint(tree, hf_udp_dstport, tvb, 0, 0, dst_port);
+        proto_item_set_hidden(tmp_item);
+    }
     else if (tmp_int == IP_PROTO_ICMP)
         add_network_filter(tvb, tree, "icmp");
     else if (tmp_int == IP_PROTO_ICMPV6)
@@ -1587,6 +1705,74 @@ void proto_register_tracee(void)
         }
     };
 
+    static hf_register_info network_hf[] = {
+        { &hf_ip_addr,
+          { "ip.addr", "ip.addr",
+            FT_IPv4, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ip_src,
+          { "ip.src", "ip.src",
+            FT_IPv4, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ip_dst,
+          { "ip.dst", "ip.dst",
+            FT_IPv4, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ipv6_addr,
+          { "ipv6.addr", "ipv6.addr",
+            FT_IPv6, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ipv6_src,
+          { "ipv6.src", "ipv6.src",
+            FT_IPv6, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ipv6_dst,
+          { "ipv6.dst", "ipv6.dst",
+            FT_IPv6, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ip_proto,
+          { "ip.proto", "ip.proto",
+            FT_UINT8, BASE_DEC, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_tcp_port,
+          { "tcp.port", "tcp.port",
+            FT_UINT16, BASE_PT_TCP, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_tcp_srcport,
+          { "tcp.srcport", "tcp.srcport",
+            FT_UINT16, BASE_PT_TCP, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_tcp_dstport,
+          { "tcp.dstport", "tcp.dstport",
+            FT_UINT16, BASE_PT_TCP, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_udp_port,
+          { "udp.port", "udp.port",
+            FT_UINT16, BASE_PT_UDP, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_udp_srcport,
+          { "udp.srcport", "udp.srcport",
+            FT_UINT16, BASE_PT_UDP, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_udp_dstport,
+          { "udp.dstport", "udp.dstport",
+            FT_UINT16, BASE_PT_UDP, NULL, 0,
+            NULL, HFILL }
+        }
+    };
+
     static hf_register_info sockaddr_hf[] = {
         { &hf_sockaddr_sa_family,
           { "sa_family", "tracee.sockaddr.sa_family",
@@ -1748,6 +1934,7 @@ void proto_register_tracee(void)
 
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
+    proto_register_field_array(proto_tracee, network_hf, array_length(network_hf));
     proto_register_field_array(proto_tracee, sockaddr_hf, array_length(sockaddr_hf));
     proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
     proto_register_field_array(proto_tracee, pktmeta_hf, array_length(pktmeta_hf));
