@@ -56,6 +56,21 @@ static int hf_process_lineage_command = -1;
 static int hf_tiggered_by_id = -1;
 static int hf_tiggered_by_name = -1;
 static int hf_tiggered_by_return_value = -1;
+static int hf_metadata_version = -1;
+static int hf_metadata_description = -1;
+//static int hf_metadata_tags = -1;
+static int hf_metadata_properties_category = -1;
+static int hf_metadata_properties_kubernetes_technique = -1;
+static int hf_metadata_properties_severity = -1;
+static int hf_metadata_properties_technique = -1;
+static int hf_metadata_properties_aggregation_keys = -1;
+static int hf_metadata_properties_external_id = -1;
+static int hf_metadata_properties_id = -1;
+static int hf_metadata_properties_release = -1;
+static int hf_metadata_properties_signature_id = -1;
+static int hf_metadata_properties_signature_name = -1;
+
+// sockaddr fields
 static int hf_sockaddr_sa_family = -1;
 static int hf_sockaddr_sun_path = -1;
 static int hf_sockaddr_sin_addr = -1;
@@ -64,6 +79,8 @@ static int hf_sockaddr_sin6_addr = -1;
 static int hf_sockaddr_sin6_port = -1;
 static int hf_sockaddr_sin6_flowinfo = -1;
 static int hf_sockaddr_sin6_scopeid = -1;
+
+// slim_cred_t fields
 static int hf_slim_cred_t_uid = -1;
 static int hf_slim_cred_t_gid = -1;
 static int hf_slim_cred_t_suid = -1;
@@ -79,20 +96,15 @@ static int hf_slim_cred_t_cap_permitted = -1;
 static int hf_slim_cred_t_cap_effective = -1;
 static int hf_slim_cred_t_cap_bounding = -1;
 static int hf_slim_cred_t_cap_ambient = -1;
-static int hf_metadata_version = -1;
-static int hf_metadata_description = -1;
-//static int hf_metadata_tags = -1;
-static int hf_metadata_properties_category = -1;
-static int hf_metadata_properties_kubernetes_technique = -1;
-static int hf_metadata_properties_severity = -1;
-static int hf_metadata_properties_technique = -1;
-static int hf_metadata_properties_aggregation_keys = -1;
-static int hf_metadata_properties_external_id = -1;
-static int hf_metadata_properties_id = -1;
-static int hf_metadata_properties_release = -1;
-static int hf_metadata_properties_signature_id = -1;
-static int hf_metadata_properties_signature_name = -1;
 
+// trace.PktMeta fields
+static int hf_pktmeta_src_ip = -1;
+static int hf_pktmeta_dst_ip = -1;
+static int hf_pktmeta_src_port = -1;
+static int hf_pktmeta_dst_port = -1;
+static int hf_pktmeta_protocol = -1;
+static int hf_pktmeta_packet_len = -1;
+static int hf_pktmeta_iface = -1;
 static gint ett_tracee = -1;
 static gint ett_container = -1;
 static gint ett_metadata = -1;
@@ -735,6 +747,40 @@ static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_dat
     proto_tree_add_int64(tree, hf_slim_cred_t_cap_ambient, tvb, 0, 0, tmp_int);
 }
 
+static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gint64 tmp_int;
+    gchar *tmp_str;
+
+    // add src ip
+    if ((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL)
+        proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
+    
+    // add dst ip
+    if ((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL)
+        proto_tree_add_string(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
+    
+    // add src port
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "src_port", &tmp_int));
+    proto_tree_add_uint(tree, hf_pktmeta_src_port, tvb, 0, 0, (guint32)tmp_int);
+
+    // add dst port
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "dst_port", &tmp_int));
+    proto_tree_add_uint(tree, hf_pktmeta_dst_port, tvb, 0, 0, (guint32)tmp_int);
+
+    // add protocol
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "protocol", &tmp_int));
+    proto_tree_add_uint(tree, hf_pktmeta_protocol, tvb, 0, 0, (guint32)tmp_int);
+
+    // add packet len
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "packet_len", &tmp_int));
+    proto_tree_add_uint(tree, hf_pktmeta_packet_len, tvb, 0, 0, (guint32)tmp_int);
+
+    // add iface
+    if ((tmp_str = json_get_string(json_data, obj_tok, "iface")) != NULL)
+        proto_tree_add_string(tree, hf_pktmeta_iface, tvb, 0, 0, tmp_str);
+}
+
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
     const gchar *arg_type, gchar *json_data, jsmntok_t *arg_tok, gchar **arg_str, const gchar *event_name)
 {
@@ -776,6 +822,10 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     // slim_cred_t
     else if (strcmp(arg_type, "slim_cred_t") == 0)
         dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_slim_cred_t);
+    
+    // trace.PktMeta
+    else if (strcmp(arg_type, "trace.PktMeta") == 0)
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_pktmeta);
 
     else
         return FALSE;
@@ -1438,6 +1488,69 @@ void proto_register_tracee(void)
             FT_INT64, BASE_DEC, NULL, 0,
             "Return value of the event that triggered the signature", HFILL }
         },
+        { &hf_metadata_version,
+          { "Version", "tracee.metadata.Version",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Signature version", HFILL }
+        },
+        { &hf_metadata_description,
+          { "Description", "tracee.metadata.Description",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Signature description", HFILL }
+        },
+        { &hf_metadata_properties_category,
+          { "Category", "tracee.metadata.Properties.Category",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Signature category", HFILL }
+        },
+        { &hf_metadata_properties_kubernetes_technique,
+          { "Kubernetes Technique", "tracee.metadata.Properties.Kubernetes_Technique",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_severity,
+          { "Severity", "tracee.metadata.Properties.Severity",
+            FT_INT32, BASE_DEC, NULL, 0,
+            "Severity of the signature (0 is lowest, 4 is highest)", HFILL }
+        },
+        { &hf_metadata_properties_technique,
+          { "Technique", "tracee.metadata.Properties.Technique",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_aggregation_keys,
+          { "Aggregation Keys", "tracee.metadata.Properties.aggregation_keys",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_external_id,
+          { "External ID", "tracee.metadata.Properties.external_id",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "External technique ID (e.g. MITRE)", HFILL }
+        },
+        { &hf_metadata_properties_id,
+          { "Unified External ID", "tracee.metadata.Properties.id",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_release,
+          { "Release", "tracee.metadata.Properties.release",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_signature_id,
+          { "Internal ID", "tracee.metadata.Properties.signatureID",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_metadata_properties_signature_name,
+          { "Signature Name", "tracee.metadata.Properties.signatureName",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        }
+    };
+
+    static hf_register_info sockaddr_hf[] = {
         { &hf_sockaddr_sa_family,
           { "sa_family", "tracee.sockaddr.sa_family",
             FT_STRINGZ, BASE_NONE, NULL, 0,
@@ -1477,7 +1590,10 @@ void proto_register_tracee(void)
           { "sin6_scopeid", "tracee.sockaddr.sin6_scopeid",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Socket IPv6 scope id (new in RFC2553)", HFILL }
-        },
+        }
+    };
+
+    static hf_register_info slim_cred_t_hf[] = {
         { &hf_slim_cred_t_uid,
           { "UID", "tracee.slim_cred_t.uid",
             FT_INT64, BASE_DEC, NULL, 0,
@@ -1552,71 +1668,52 @@ void proto_register_tracee(void)
           { "CapAmb", "tracee.slim_cred_t.cap_ambient",
             FT_INT64, BASE_DEC, NULL, 0,
             "Ambient capabilities", HFILL }
-        },
-        { &hf_metadata_version,
-          { "Version", "tracee.metadata.Version",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            "Signature version", HFILL }
-        },
-        { &hf_metadata_description,
-          { "Description", "tracee.metadata.Description",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            "Signature description", HFILL }
-        },
-        { &hf_metadata_properties_category,
-          { "Category", "tracee.metadata.Properties.Category",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            "Signature category", HFILL }
-        },
-        { &hf_metadata_properties_kubernetes_technique,
-          { "Kubernetes Technique", "tracee.metadata.Properties.Kubernetes_Technique",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_severity,
-          { "Severity", "tracee.metadata.Properties.Severity",
-            FT_INT32, BASE_DEC, NULL, 0,
-            "Severity of the signature (0 is lowest, 4 is highest)", HFILL }
-        },
-        { &hf_metadata_properties_technique,
-          { "Technique", "tracee.metadata.Properties.Technique",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_aggregation_keys,
-          { "Aggregation Keys", "tracee.metadata.Properties.aggregation_keys",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_external_id,
-          { "External ID", "tracee.metadata.Properties.external_id",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            "External technique ID (e.g. MITRE)", HFILL }
-        },
-        { &hf_metadata_properties_id,
-          { "Unified External ID", "tracee.metadata.Properties.id",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_release,
-          { "Release", "tracee.metadata.Properties.release",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_signature_id,
-          { "Internal ID", "tracee.metadata.Properties.signatureID",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_metadata_properties_signature_name,
-          { "Signature Name", "tracee.metadata.Properties.signatureName",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
         }
+    };
+
+    static hf_register_info pktmeta_hf[] = {
+        { &hf_pktmeta_src_ip,
+          { "Src IP", "tracee.pktmeta.src_ip",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Source IP", HFILL }
+        },
+        { &hf_pktmeta_dst_ip,
+          { "Dst IP", "tracee.pktmeta.dst_ip",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Destination IP", HFILL }
+        },
+        { &hf_pktmeta_src_port,
+          { "Src Port", "tracee.pktmeta.src_port",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Source port", HFILL }
+        },
+        { &hf_pktmeta_dst_port,
+          { "Dst Port", "tracee.pktmeta.dst_port",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Destination port", HFILL }
+        },
+        { &hf_pktmeta_protocol,
+          { "Protocol", "tracee.pktmeta.protocol",
+            FT_UINT32, BASE_DEC, VALS(ipproto_val), 0,
+            "IP protocol", HFILL }
+        },
+        { &hf_pktmeta_packet_len,
+          { "Len", "tracee.pktmeta.packet_len",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "Packet length", HFILL }
+        },
+        { &hf_pktmeta_iface,
+          { "Iface", "tracee.pktmeta.iface",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Interface", HFILL }
+        },
     };
 
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
+    proto_register_field_array(proto_tracee, sockaddr_hf, array_length(sockaddr_hf));
+    proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
+    proto_register_field_array(proto_tracee, pktmeta_hf, array_length(pktmeta_hf));
     proto_register_subtree_array(ett, array_length(ett));
 
     // create dynamic field array map for event arguments
