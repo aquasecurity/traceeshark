@@ -647,9 +647,9 @@ static void add_network_filter(tvbuff_t *tvb, proto_tree *tree, const gchar *fil
     proto_item_set_hidden(item);
 }
 
-typedef void (*object_dissector_t) (tvbuff_t*, proto_tree*, gchar*, jsmntok_t*);
+typedef void (*object_dissector_t) (tvbuff_t*, proto_tree*, gchar*, jsmntok_t*, gchar**);
 
-static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok, const gchar *arg_name, object_dissector_t dissector)
+static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok, const gchar *arg_name, gchar **arg_str, object_dissector_t dissector)
 {
     proto_item *obj_item;
     proto_tree *obj_tree;
@@ -669,10 +669,10 @@ static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data
     }
 
     // call dissector for this object
-    dissector(tvb, obj_tree, json_data, obj_tok);
+    dissector(tvb, obj_tree, json_data, obj_tok, arg_str);
 }
 
-static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str)
 {
     gchar *tmp_str;
     proto_item *tmp_item;
@@ -681,21 +681,24 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     gint64 tmp_int;
 
     // add sa_family
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL) {
-        proto_tree_add_string(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
-        if (strcmp(tmp_str, "AF_INET") == 0)
-            add_network_filter(tvb, tree, "ip");
-        else if (strcmp(tmp_str, "AF_INET6") == 0)
-            add_network_filter(tvb, tree, "ipv6");
-    }
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL);
+    proto_tree_add_string(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "{sa_family = %s", tmp_str);
+    if (strcmp(tmp_str, "AF_INET") == 0)
+        add_network_filter(tvb, tree, "ip");
+    else if (strcmp(tmp_str, "AF_INET6") == 0)
+        add_network_filter(tvb, tree, "ipv6");    
     
     // add sun_path
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sun_path")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sun_path")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sun_path = %s", *arg_str, tmp_str);
+    }
     
     // add sin_addr
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin_addr")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin_addr = %s", *arg_str, tmp_str);
         DISSECTOR_ASSERT(ws_inet_pton4(tmp_str, &in4_addr));
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
         proto_item_set_hidden(tmp_item);
@@ -710,6 +713,7 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     // add sin_port
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin_port = %s", *arg_str, tmp_str);
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
 
@@ -731,6 +735,7 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     // add sin6_addr
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_addr")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_addr = %s", *arg_str, tmp_str);
         if (ws_inet_pton6(tmp_str, &in6_addr)) {
             tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_addr, tvb, 0, 0, &in6_addr);
             proto_item_set_hidden(tmp_item);
@@ -749,6 +754,7 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     // add sin6_port
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_port = %s", *arg_str, tmp_str);
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
 
@@ -768,15 +774,21 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     }
     
     // add sin6_flowinfo
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_flowinfo")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_flowinfo")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, tmp_str);
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_flowinfo = %s", *arg_str, tmp_str);
+    }
     
     // add sin6_scopeid
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_scopeid")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_scopeid")) != NULL) {
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_scopeid = %s", *arg_str, tmp_str);
         proto_tree_add_string(tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
+    }
+
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s}", *arg_str);
 }
 
-static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str _U_)
 {
     gint64 tmp_int;
 
@@ -841,7 +853,7 @@ static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_dat
     proto_tree_add_int64(tree, hf_slim_cred_t_cap_ambient, tvb, 0, 0, tmp_int);
 }
 
-static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str _U_)
 {
     gint64 tmp_int;
     gchar *tmp_str;
@@ -853,6 +865,7 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     // add src ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "{src_ip = %s", tmp_str);
     if (ws_inet_pton4(tmp_str, &in4_addr)) {
         add_network_filter(tvb, tree, "ip");
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
@@ -871,6 +884,7 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     // add dst ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, dst_ip = %s", *arg_str, tmp_str);
     if (ws_inet_pton4(tmp_str, &in4_addr)) {
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
         proto_item_set_hidden(tmp_item);
@@ -889,15 +903,18 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "src_port", &tmp_int));
     src_port = (guint32)tmp_int;
     proto_tree_add_uint(tree, hf_pktmeta_src_port, tvb, 0, 0, src_port);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, src_port = %u", *arg_str, src_port);
 
     // add dst port
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "dst_port", &tmp_int));
     dst_port = (guint32)tmp_int;
     proto_tree_add_uint(tree, hf_pktmeta_dst_port, tvb, 0, 0, dst_port);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, dst_port = %u", *arg_str, dst_port);
 
     // add protocol
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "protocol", &tmp_int));
     proto_tree_add_uint(tree, hf_pktmeta_protocol, tvb, 0, 0, (guint32)tmp_int);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, ipproto = %u", *arg_str, (guint32)tmp_int);
     tmp_item = proto_tree_add_uint(tree, hf_ip_proto, tvb, 0, 0, (guint8)tmp_int);
     proto_item_set_hidden(tmp_item);
     if (tmp_int == IP_PROTO_TCP) {
@@ -930,10 +947,12 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     // add packet len
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "packet_len", &tmp_int));
     proto_tree_add_uint(tree, hf_pktmeta_packet_len, tvb, 0, 0, (guint32)tmp_int);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, len = %u", *arg_str, (guint32)tmp_int);
 
     // add iface
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "iface")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_iface, tvb, 0, 0, tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, iface = %s", *arg_str, tmp_str);
 }
 
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
@@ -972,15 +991,15 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     
     // sockaddr
     else if (strcmp(arg_type, "struct sockaddr*") == 0)
-        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_sockaddr);
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, arg_str, dissect_sockaddr);
     
     // slim_cred_t
     else if (strcmp(arg_type, "slim_cred_t") == 0)
-        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_slim_cred_t);
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, arg_str, dissect_slim_cred_t);
     
     // trace.PktMeta
     else if (strcmp(arg_type, "trace.PktMeta") == 0)
-        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, dissect_pktmeta);
+        dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, arg_str, dissect_pktmeta);
 
     else
         return FALSE;
