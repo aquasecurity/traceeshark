@@ -590,7 +590,11 @@ static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     dissect_arguments(tvb, pinfo, triggered_by_tree, json_data, triggered_by_tok, wmem_strdup_printf(pinfo->pool, "%s.triggered_by", event_name));
 
     // add id
-    DISSECTOR_ASSERT(json_get_int(json_data, triggered_by_tok, "id", &tmp_int));
+    if (!json_get_int(json_data, triggered_by_tok, "id", &tmp_int)) {
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, triggered_by_tok, "id")) != NULL);
+        tmp_int = strtoll(tmp_str, NULL, 10);
+        DISSECTOR_ASSERT(errno == 0);
+    }
     proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_id, tvb, 0, 0, tmp_int);
 
     // add name
@@ -1097,11 +1101,12 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     dissect_container_fields(tvb, pinfo, tree, json_data, root_tok);
 
     // add event ID
-    if ((tmp_str = json_get_string(json_data, root_tok, "eventId")) == NULL) {
-        DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "eventId", &tmp_int));
-        tmp_str = wmem_strdup_printf(pinfo->pool, "%" PRId64, tmp_int);
+    if (!json_get_int(json_data, root_tok, "eventId", &tmp_int)) {
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "eventId")) != NULL);
+        tmp_int = strtoll(tmp_str, NULL, 10);
+        DISSECTOR_ASSERT(errno == 0);
     }
-    proto_tree_add_string(tree, hf_event_id, tvb, 0, 0, tmp_str);
+    proto_tree_add_int64(tree, hf_event_id, tvb, 0, 0, tmp_int);
 
     // add event name
     DISSECTOR_ASSERT((event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(event_name) > 0);
@@ -1330,7 +1335,7 @@ void proto_register_tracee(void)
         },
         { &hf_event_id,
           { "Event ID", "tracee.eventId",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
+            FT_INT64, BASE_DEC, NULL, 0,
             "Tracee event ID", HFILL }
         },
         { &hf_event_name,
