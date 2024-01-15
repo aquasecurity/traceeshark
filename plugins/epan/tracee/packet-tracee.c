@@ -2,6 +2,7 @@
 #include <epan/packet.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
+#include <epan/ipproto.h>
 
 static int proto_tracee = -1;
 
@@ -69,6 +70,13 @@ static int hf_metadata_properties_id = -1;
 static int hf_metadata_properties_release = -1;
 static int hf_metadata_properties_signature_id = -1;
 static int hf_metadata_properties_signature_name = -1;
+
+// network fields
+/*static int hf_ip_addr = -1;
+static int hf_ip_src = -1;
+static int hf_ip_dst = -1;
+static int hf_ipproto = -1;
+static int hf_*/
 
 // sockaddr fields
 static int hf_sockaddr_sa_family = -1;
@@ -620,6 +628,16 @@ static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_return_value, tvb, 0, 0, tmp_int);
 }
 
+static void add_network_filter(tvbuff_t *tvb, proto_tree *tree, const gchar *filter)
+{
+    proto_item *item;
+    int proto;
+
+    DISSECTOR_ASSERT((proto = proto_get_id_by_filter_name(filter)) != -1);
+    item = proto_tree_add_item(tree, proto, tvb, 0, 0, ENC_NA);
+    proto_item_set_hidden(item);
+}
+
 typedef void (*object_dissector_t) (tvbuff_t*, proto_tree*, gchar*, jsmntok_t*);
 
 static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok, const gchar *arg_name, object_dissector_t dissector)
@@ -650,8 +668,13 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     gchar *tmp_str;
 
     // add sa_family
-    if ((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL)
+    if ((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL) {
         proto_tree_add_string(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
+        if (strcmp(tmp_str, "AF_INET") == 0)
+            add_network_filter(tvb, tree, "ip");
+        else if (strcmp(tmp_str, "AF_INET6") == 0)
+            add_network_filter(tvb, tree, "ipv6");
+    }
     
     // add sun_path
     if ((tmp_str = json_get_string(json_data, obj_tok, "sun_path")) != NULL)
@@ -751,14 +774,20 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
 {
     gint64 tmp_int;
     gchar *tmp_str;
+    ws_in4_addr in4_addr;
+    ws_in6_addr in6_addr;
 
     // add src ip
-    if ((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL)
-        proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL);
+    proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
+    if (ws_inet_pton4(tmp_str, &in4_addr))
+        add_network_filter(tvb, tree, "ip");
+    else if (ws_inet_pton6(tmp_str, &in6_addr))
+        add_network_filter(tvb, tree, "ipv6");
     
     // add dst ip
-    if ((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL)
-        proto_tree_add_string(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL);
+    proto_tree_add_string(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
     
     // add src port
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "src_port", &tmp_int));
@@ -771,14 +800,22 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     // add protocol
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "protocol", &tmp_int));
     proto_tree_add_uint(tree, hf_pktmeta_protocol, tvb, 0, 0, (guint32)tmp_int);
+    if (tmp_int == IP_PROTO_TCP)
+        add_network_filter(tvb, tree, "tcp");
+    else if (tmp_int == IP_PROTO_UDP)
+        add_network_filter(tvb, tree, "udp");
+    else if (tmp_int == IP_PROTO_ICMP)
+        add_network_filter(tvb, tree, "icmp");
+    else if (tmp_int == IP_PROTO_ICMPV6)
+        add_network_filter(tvb, tree, "icmpv6");
 
     // add packet len
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "packet_len", &tmp_int));
     proto_tree_add_uint(tree, hf_pktmeta_packet_len, tvb, 0, 0, (guint32)tmp_int);
 
     // add iface
-    if ((tmp_str = json_get_string(json_data, obj_tok, "iface")) != NULL)
-        proto_tree_add_string(tree, hf_pktmeta_iface, tvb, 0, 0, tmp_str);
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "iface")) != NULL);
+    proto_tree_add_string(tree, hf_pktmeta_iface, tvb, 0, 0, tmp_str);
 }
 
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
