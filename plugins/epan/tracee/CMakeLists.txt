@@ -13,7 +13,9 @@ include(WiresharkPlugin)
 set_module_info(tracee-epan 0 0 1 0)
 
 set(DISSECTOR_SRC
+	tracee-common.c
 	packet-tracee.c
+	packet-tracee-network-capture.c
 )
 
 set(PLUGIN_FILES

@@ -1,3 +1,4 @@
+#include "tracee.h"
 #include <epan/packet.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
@@ -13,7 +14,7 @@ static int hf_process_id = -1;
 static int hf_cgroup_id = -1;
 static int hf_thread_id = -1;
 static int hf_parent_process_id = -1;
-static int hf_host_process_id = -1;
+int hf_host_process_id = -1; // needs to be accessible by tracee network capture dissector
 static int hf_pid_col = -1;
 static int hf_tid_col = -1;
 static int hf_ppid_col = -1;
@@ -138,80 +139,6 @@ static bool dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_e
 
     // return TRUE so this callback isn't unregistered
     return TRUE;
-}
-
-/*
- * From wsutil/jsmn.c
- */
-static jsmntok_t *json_get_next_object(jsmntok_t *cur)
-{
-    int i;
-    jsmntok_t *next = cur+1;
-
-    for (i = 0; i < cur->size; i++) {
-        next = json_get_next_object(next);
-    }
-    return next;
-}
-
-/**
- * Get the value of a number object belonging to parent object and named as the name variable.
- * Returns FALSE if not found. Caution: it modifies input buffer.
- */
-static bool json_get_int(char *buf, jsmntok_t *parent, const char *name, gint64 *val)
-{
-    int i;
-    jsmntok_t *cur = parent+1;
-
-    for (i = 0; i < parent->size; i++) {
-        if (cur->type == JSMN_STRING &&
-            !strncmp(&buf[cur->start], name, cur->end - cur->start)
-            && strlen(name) == (size_t)(cur->end - cur->start) &&
-            cur->size == 1 && (cur+1)->type == JSMN_PRIMITIVE) {
-            buf[(cur+1)->end] = '\0';
-            errno = 0; // for some reason we have to clear errno manually, because it has an unrelated error stuck which isn't cleared
-            *val = strtoll(&buf[(cur+1)->start], NULL, 10);
-            if (errno != 0)
-                return false;
-            return true;
-        }
-        cur = json_get_next_object(cur);
-    }
-    return false;
-}
-
-/**
- * Get a null object belonging to parent object and named as the name variable.
- * Returns FALSE if not found or the object is not a null. Caution: it modifies input buffer.
- */
-bool json_get_null(char *buf, jsmntok_t *parent, const char *name)
-{
-    int i;
-    size_t tok_len;
-    jsmntok_t *cur = parent+1;
-
-    for (i = 0; i < parent->size; i++) {
-        if (cur->type == JSMN_STRING &&
-            !strncmp(&buf[cur->start], name, cur->end - cur->start)
-            && strlen(name) == (size_t)(cur->end - cur->start) &&
-            cur->size == 1 && (cur+1)->type == JSMN_PRIMITIVE) {
-            /* JSMN_STRICT guarantees that a primitive starts with the
-             * correct character.
-             */
-            tok_len = (cur+1)->end - (cur+1)->start;
-            if (tok_len == 4 && strncmp(&buf[(cur+1)->start], "null", tok_len) == 0)
-                return true;
-            return false;
-        }
-        cur = json_get_next_object(cur);
-    }
-    return false;
-}
-
-static bool json_get_int_or_null(char *buf, jsmntok_t *parent, const char *name, gint64 *val)
-{
-    return json_get_int(buf, parent, name, val) ? true : json_get_null(buf, parent, name);
-    
 }
 
 static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
@@ -365,7 +292,8 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "trace.ProtoUDP")                     == 0 ||
              strcmp(type, "[]trace.HookedSymbolData")           == 0 ||
              strcmp(type, "struct file_operations *")           == 0 ||
-             strcmp(type, "const struct iovec*")                == 0) {
+             strcmp(type, "const struct iovec*")                == 0 ||
+             strcmp(type, "trace.ProtoDNS")                     == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
@@ -1057,7 +985,7 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     proto_item *metadata_item, *args_item, *tmp_item;
 
     num_toks = json_parse(json_data, NULL, 0);
-    DISSECTOR_ASSERT_HINT(num_toks > 0, "JSON decode error: non-positive max_toks");
+    DISSECTOR_ASSERT_HINT(num_toks > 0, "JSON decode error: non-positive num_toks");
 
     root_tok = wmem_alloc_array(pinfo->pool, jsmntok_t, num_toks);
     if (json_parse(json_data, root_tok, num_toks) <= 0)
@@ -1226,8 +1154,8 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
 static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
 {
-    proto_tree *tracee_json_tree;
     proto_item *tracee_json_item;
+    proto_tree *tracee_json_tree;
     guint len;
     gchar *json_data;
     gchar *event_name _U_;
@@ -1235,8 +1163,8 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
 
     // create tracee tree
-    tracee_json_tree = proto_tree_add_item(tree, proto_tracee, tvb, 0, -1, ENC_NA);
-    tracee_json_item = proto_item_add_subtree(tracee_json_tree, ett_tracee);
+    tracee_json_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, -1, ENC_NA);
+    tracee_json_tree = proto_item_add_subtree(tracee_json_item, ett_tracee);
 
     proto_item_set_text(tracee_json_tree, "Tracee Event (JSON)");
 
