@@ -95,6 +95,10 @@ static nstime_t *parse_ts(char *event)
     gint64 ts_int;
     nstime_t *ts;
 
+    // skip any whitespace
+    while (event[ts_start] == ' ')
+        ts_start++;
+    
     // make sure this is a digit
     if (event[ts_start] < '0' || event[ts_start] > '9')
         return NULL;
