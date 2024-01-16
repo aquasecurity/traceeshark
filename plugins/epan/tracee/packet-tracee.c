@@ -33,7 +33,9 @@ static int hf_container_image = -1;
 static int hf_container_image_digest = -1;
 static int hf_is_container = -1;
 static int hf_container_col = -1;
-// KUBERNETES INFO
+static int hf_k8s_pod_name = -1;
+static int hf_k8s_pod_namespace = -1;
+static int hf_k8s_pod_uid = -1;
 static int hf_event_id = -1;
 static int hf_event_name = -1;
 static int hf_is_signature = -1;
@@ -132,6 +134,7 @@ static int hf_dnsquery_class = -1;
 
 static gint ett_tracee = -1;
 static gint ett_container = -1;
+static gint ett_k8s = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
 static gint ett_args = -1;
@@ -226,8 +229,45 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
         if (image != NULL)
             container_col_str = wmem_strdup_printf(pinfo->pool, "%s (%s)", container_col_str, image);
         
-        proto_tree_add_string(tree, hf_container_col, tvb, 0, 0, container_col_str);
+        tmp_item = proto_tree_add_string(tree, hf_container_col, tvb, 0, 0, container_col_str);
+        proto_item_set_hidden(tmp_item);
     }
+}
+
+static void dissect_k8s_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data _U_, jsmntok_t *root_tok _U_)
+{
+    proto_item *k8s_item;
+    proto_tree *k8s_tree;
+    jsmntok_t *k8s_tok;
+    gchar *pod_name, *pod_namespace, *pod_uid;
+
+    k8s_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(k8s_item, "Kubernetes");
+    k8s_tree = proto_item_add_subtree(k8s_item, ett_k8s);
+
+    // get k8s object
+    DISSECTOR_ASSERT((k8s_tok = json_get_object(json_data, root_tok, "kubernetes")) != NULL);
+
+    // add pod name
+    if ((pod_name = json_get_string(json_data, k8s_tok, "podName")) != NULL) {
+        proto_tree_add_string(k8s_tree, hf_k8s_pod_name, tvb, 0, 0, pod_name);
+        proto_item_append_text(k8s_item, ": %s", pod_name);
+    }
+
+    // add pod namespace
+    if ((pod_namespace = json_get_string(json_data, k8s_tok, "podNamespace")) != NULL) {
+        proto_tree_add_string(k8s_tree, hf_k8s_pod_namespace, tvb, 0, 0, pod_namespace);
+        if (pod_name != NULL)
+            proto_item_append_text(k8s_item, " (%s)", pod_namespace);
+    }
+
+    // add pod UID
+    if ((pod_uid = json_get_string(json_data, k8s_tok, "podUID")) != NULL)
+        proto_tree_add_string(k8s_tree, hf_k8s_pod_uid, tvb, 0, 0, pod_uid);
+    
+    // no kubernetes info
+    if (!pod_name && !pod_namespace && !pod_uid)
+        proto_item_append_text(k8s_item, ": none");
 }
 
 struct type_display {
@@ -1420,6 +1460,9 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     // add container fields
     dissect_container_fields(tvb, pinfo, tree, json_data, root_tok);
 
+    // add k8s fields
+    dissect_k8s_fields(tvb, tree, json_data, root_tok);
+
     // add event ID
     if (!json_get_int(json_data, root_tok, "eventId", &tmp_int)) {
         DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "eventId")) != NULL);
@@ -1517,6 +1560,7 @@ void proto_register_tracee(void)
     static gint *ett[] = {
         &ett_tracee,
         &ett_container,
+        &ett_k8s,
         &ett_metadata,
         &ett_metadata_properties,
         &ett_args,
@@ -1651,6 +1695,21 @@ void proto_register_tracee(void)
         },
         { &hf_container_col,
           { "Container Column", "tracee.container_col",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_k8s_pod_name,
+          { "Pod Name", "tracee.kubernetes.podName",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_k8s_pod_namespace,
+          { "Pod Namespace", "tracee.kubernetes.podNamespace",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_k8s_pod_uid,
+          { "Pod UID", "tracee.kubernetes.podUID",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
