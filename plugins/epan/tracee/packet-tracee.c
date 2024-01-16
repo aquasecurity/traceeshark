@@ -85,6 +85,9 @@ static int hf_tcp_dstport = -1;
 static int hf_udp_port = -1;
 static int hf_udp_srcport = -1;
 static int hf_udp_dstport = -1;
+static int hf_dns_qry_name = -1;
+static int hf_dns_qry_type = -1;
+static int hf_dns_qry_class = -1;
 
 // sockaddr fields
 static int hf_sockaddr_sa_family = -1;
@@ -122,6 +125,11 @@ static int hf_pktmeta_protocol = -1;
 static int hf_pktmeta_packet_len = -1;
 static int hf_pktmeta_iface = -1;
 
+// trace.DnsQueryData fields
+static int hf_dnsquery_query = -1;
+static int hf_dnsquery_type = -1;
+static int hf_dnsquery_class = -1;
+
 static gint ett_tracee = -1;
 static gint ett_container = -1;
 static gint ett_metadata = -1;
@@ -132,6 +140,7 @@ static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
 static gint ett_triggered_by = -1;
 static gint ett_arg_obj = -1;
+static gint ett_arg_obj_arr = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -649,7 +658,8 @@ static void add_network_filter(tvbuff_t *tvb, proto_tree *tree, const gchar *fil
 
 typedef void (*object_dissector_t) (tvbuff_t*, proto_tree*, gchar*, jsmntok_t*, gchar**);
 
-static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok, const gchar *arg_name, gchar **arg_str, object_dissector_t dissector)
+static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data,
+    jsmntok_t *arg_tok, const gchar *arg_name, gchar **arg_str, object_dissector_t dissector)
 {
     proto_item *obj_item;
     proto_tree *obj_tree;
@@ -670,6 +680,56 @@ static void dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data
 
     // call dissector for this object
     dissector(tvb, obj_tree, json_data, obj_tok, arg_str);
+
+    // wrap arg str in brackets
+    if (*arg_str != NULL)
+        *arg_str = wmem_strdup_printf(wmem_packet_scope(), "{%s}", *arg_str);
+}
+
+static void dissect_object_array_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data,
+    jsmntok_t *arg_tok, const gchar *arg_name, gchar **arg_arr_str, object_dissector_t dissector)
+{
+    proto_item *arr_item, *obj_item;
+    proto_tree *arr_tree, *obj_tree;
+    jsmntok_t *arr_tok, *obj_tok;
+    int arr_len, i;
+    gchar *arg_str;
+
+    // create array subtree
+    arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(arr_item, "%s", arg_name);
+    arr_tree = proto_item_add_subtree(arr_item, ett_arg_obj_arr);
+
+    // get the array
+    DISSECTOR_ASSERT((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL);
+    DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
+    proto_item_append_text(arr_item, ": %d item%s", arr_len, arr_len == 1 ? "" : "s");
+
+    // go through each array element and dissect it
+    for (i = 0; i < arr_len; i++) {
+        // add item subtree
+        obj_item = proto_tree_add_item(arr_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+        proto_item_set_text(obj_item, "%s[%d]", arg_name, i);
+        obj_tree = proto_item_add_subtree(obj_item, ett_arg_obj);
+
+        // call dissector for the object
+        DISSECTOR_ASSERT((obj_tok = json_get_array_index(arr_tok, i)) != NULL);
+        arg_str = NULL;
+        dissector(tvb, obj_tree, json_data, obj_tok, &arg_str);
+
+        // add arg str to array str
+        if (arg_str != NULL) {
+            // array str not initialized yet
+            if (*arg_arr_str == NULL)
+                *arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "[{%s}", arg_str);
+            else
+                *arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "%s, {%s}", *arg_arr_str, arg_str);
+        }
+    }
+    
+    // finalize array str
+    if (*arg_arr_str != NULL)
+        *arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "%s]", *arg_arr_str);
 }
 
 static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str)
@@ -683,7 +743,7 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
     // add sa_family
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL);
     proto_tree_add_string(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
-    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "{sa_family = %s", tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "sa_family = %s", tmp_str);
     if (strcmp(tmp_str, "AF_INET") == 0)
         add_network_filter(tvb, tree, "ip");
     else if (strcmp(tmp_str, "AF_INET6") == 0)
@@ -784,8 +844,6 @@ static void dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, 
         *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_scopeid = %s", *arg_str, tmp_str);
         proto_tree_add_string(tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
     }
-
-    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s}", *arg_str);
 }
 
 static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str _U_)
@@ -853,7 +911,7 @@ static void dissect_slim_cred_t(tvbuff_t *tvb, proto_tree *tree, gchar *json_dat
     proto_tree_add_int64(tree, hf_slim_cred_t_cap_ambient, tvb, 0, 0, tmp_int);
 }
 
-static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str _U_)
+static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str)
 {
     gint64 tmp_int;
     gchar *tmp_str;
@@ -865,7 +923,7 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     // add src ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL);
     proto_tree_add_string(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
-    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "{src_ip = %s", tmp_str);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "src_ip = %s", tmp_str);
     if (ws_inet_pton4(tmp_str, &in4_addr)) {
         add_network_filter(tvb, tree, "ip");
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
@@ -955,6 +1013,40 @@ static void dissect_pktmeta(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, j
     *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, iface = %s", *arg_str, tmp_str);
 }
 
+static void dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok, gchar **arg_str)
+{
+    gchar *tmp_str;
+    proto_item *tmp_item;
+    guint64 tmp_uint;
+
+    add_network_filter(tvb, tree, "dns");
+
+    // add query
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query")) != NULL);
+    proto_tree_add_string(tree, hf_dnsquery_query, tvb, 0, 0, tmp_str);
+    tmp_item = proto_tree_add_string(tree, hf_dns_qry_name, tvb, 0, 0, tmp_str);
+    proto_item_set_hidden(tmp_item);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "query = %s", tmp_str);
+
+    // add type
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_type")) != NULL);
+    proto_tree_add_string(tree, hf_dnsquery_type, tvb, 0, 0, tmp_str);
+    tmp_uint = strtoull(tmp_str, NULL, 10);
+    DISSECTOR_ASSERT(errno == 0);
+    tmp_item = proto_tree_add_uint(tree, hf_dns_qry_type, tvb, 0, 0, (guint32)tmp_uint);
+    proto_item_set_hidden(tmp_item);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, type = %s", *arg_str, tmp_str);
+
+    // add class
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_class")) != NULL);
+    proto_tree_add_string(tree, hf_dnsquery_class, tvb, 0, 0, tmp_str);
+    tmp_uint = strtoull(tmp_str, NULL, 10);
+    DISSECTOR_ASSERT(errno == 0);
+    tmp_item = proto_tree_add_uint(tree, hf_dns_qry_class, tvb, 0, 0, (guint32)tmp_uint);
+    proto_item_set_hidden(tmp_item);
+    *arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, class = %s", *arg_str, tmp_str);
+}
+
 static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, hf_register_info *hf,
     const gchar *arg_type, gchar *json_data, jsmntok_t *arg_tok, gchar **arg_str, const gchar *event_name)
 {
@@ -1000,6 +1092,10 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     // trace.PktMeta
     else if (strcmp(arg_type, "trace.PktMeta") == 0)
         dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, arg_str, dissect_pktmeta);
+    
+    // trace.DnsQueryData
+    else if (strcmp(arg_type, "[]trace.DnsQueryData") == 0)
+        dissect_object_array_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, arg_str, dissect_dns_query_data);
 
     else
         return FALSE;
@@ -1428,7 +1524,8 @@ void proto_register_tracee(void)
         &ett_process_lineage,
         &ett_process_lineage_process,
         &ett_triggered_by,
-        &ett_arg_obj
+        &ett_arg_obj,
+        &ett_arg_obj_arr
     };
 
     static hf_register_info hf[] = {
@@ -1789,6 +1886,21 @@ void proto_register_tracee(void)
           { "udp.dstport", "udp.dstport",
             FT_UINT16, BASE_PT_UDP, NULL, 0,
             NULL, HFILL }
+        },
+        { &hf_dns_qry_name,
+          { "dns.qry.name", "dns.qry.name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_dns_qry_type,
+          { "dns.qry.type", "dns.qry.type",
+            FT_UINT16, BASE_DEC|BASE_EXT_STRING, &dns_types_vals_ext, 0,
+            NULL, HFILL }
+        },
+        { &hf_dns_qry_class,
+          { "dns.qry.class", "dns.qry.class",
+            FT_UINT16, BASE_HEX, VALS(dns_classes), 0,
+            NULL, HFILL }
         }
     };
 
@@ -1951,12 +2063,31 @@ void proto_register_tracee(void)
         },
     };
 
+    static hf_register_info dns_query_data_hf[] = {
+        { &hf_dnsquery_query,
+          { "Query", "tracee.dnsquery.query",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "DNS query", HFILL }
+        },
+        { &hf_dnsquery_type,
+          { "Type", "tracee.dnsquery.type",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "DNS query type", HFILL }
+        },
+        { &hf_dnsquery_class,
+          { "Class", "tracee.dnsquery.class",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "DNS query class", HFILL }
+        }
+    };
+
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
     proto_register_field_array(proto_tracee, network_hf, array_length(network_hf));
     proto_register_field_array(proto_tracee, sockaddr_hf, array_length(sockaddr_hf));
     proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
     proto_register_field_array(proto_tracee, pktmeta_hf, array_length(pktmeta_hf));
+    proto_register_field_array(proto_tracee, dns_query_data_hf, array_length(dns_query_data_hf));
     proto_register_subtree_array(ett, array_length(ett));
 
     // create dynamic field array map for event arguments
