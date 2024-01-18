@@ -12,12 +12,14 @@ static int dissect_null_override(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 {
     dissector_handle_t null_dissector;
     proto_tree *tracee_network_capture_tree;
-    proto_item *tracee_network_capture_item;
+    proto_item *tracee_network_capture_item, *tmp_item;
     guint section_number;
     char *if_descr;
     int num_toks;
     jsmntok_t *root_tok;
     gint64 tmp_int;
+    gint32 pid = -1, ns_pid = -1, ppid = -1, ns_ppid = -1;
+    gchar *tmp_str, *container_id, *container_image, *pid_col_str, *ppid_col_str, *container_col_str;
     
     DISSECTOR_ASSERT_HINT((null_dissector = find_dissector("null")) != NULL, "Cannot find Null/Loopback dissector");
 
@@ -38,10 +40,90 @@ static int dissect_null_override(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     if (json_parse(if_descr, root_tok, num_toks) <= 0)
         DISSECTOR_ASSERT_NOT_REACHED();
     
+    // add PID
     if (json_get_int(if_descr, root_tok, "pid", &tmp_int)) {
-        proto_tree_add_int(tracee_network_capture_tree, hf_host_process_id, tvb, 0, 0, (gint32)tmp_int);
-        proto_item_append_text(tracee_network_capture_item, ": PID = %d", (gint32)tmp_int);
+        pid = (gint32)tmp_int;
+        proto_tree_add_int(tracee_network_capture_tree, hf_host_process_id, tvb, 0, 0, pid);
+        proto_item_append_text(tracee_network_capture_item, ": PID = %d", pid);
     }
+
+    // add NS PID
+    if (json_get_int(if_descr, root_tok, "ns_pid", &tmp_int)) {
+        ns_pid = (gint32)tmp_int;
+        proto_tree_add_int(tracee_network_capture_tree, hf_process_id, tvb, 0, 0, ns_pid);
+    }
+    
+    // add PID column
+    if (pid != -1) {
+        pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ns_pid);
+        if (ns_pid != -1 && pid != ns_pid)
+            pid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", pid_col_str, pid);
+        tmp_item = proto_tree_add_string(tree, hf_pid_col, tvb, 0, 0, pid_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
+
+    // add PPID
+    if (json_get_int(if_descr, root_tok, "ppid", &tmp_int)) {
+        ppid = (gint32)tmp_int;
+        proto_tree_add_int(tracee_network_capture_tree, hf_host_parent_process_id, tvb, 0, 0, ppid);
+        proto_item_append_text(tracee_network_capture_item, ", PPID = %d", ppid);
+    }
+
+    // add NS PPID
+    if (json_get_int(if_descr, root_tok, "ns_ppid", &tmp_int)) {
+        ns_ppid = (gint32)tmp_int;
+        proto_tree_add_int(tracee_network_capture_tree, hf_parent_process_id, tvb, 0, 0, ns_ppid);
+    }
+
+    // add PPID column
+    if (ppid != -1) {
+        ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ns_ppid);
+        if (ns_ppid != -1 && ppid != ns_ppid)
+            ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, ppid);
+        tmp_item = proto_tree_add_string(tree, hf_ppid_col, tvb, 0, 0, ppid_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
+
+    // add process name
+    if ((tmp_str = json_get_string(if_descr, root_tok, "name")) != NULL) {
+        proto_tree_add_string(tracee_network_capture_tree, hf_process_name, tvb, 0, 0, tmp_str);
+        proto_item_append_text(tracee_network_capture_item, ", Name = %s", tmp_str);
+    }
+
+    // add container ID
+    if ((container_id = json_get_string(if_descr, root_tok, "container_id")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_container_id, tvb, 0, 0, container_id);
+    
+    // add container name
+    if ((tmp_str = json_get_string(if_descr, root_tok, "container_name")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_container_name, tvb, 0, 0, tmp_str);
+    
+    // add container image
+    if ((container_image = json_get_string(if_descr, root_tok, "container_image")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_container_image, tvb, 0, 0, container_image);
+    
+    // add container column
+    if (container_id != NULL) {
+        container_col_str = wmem_strndup(pinfo->pool, container_id, 12);
+
+        if (container_image != NULL)
+            container_col_str = wmem_strdup_printf(pinfo->pool, "%s (%s)", container_col_str, container_image);
+        
+        tmp_item = proto_tree_add_string(tree, hf_container_col, tvb, 0, 0, container_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
+    
+    // add k8s pod name
+    if ((tmp_str = json_get_string(if_descr, root_tok, "k8s_pod_name")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_k8s_pod_name, tvb, 0, 0, tmp_str);
+    
+    // add k8s pod namesapce
+    if ((tmp_str = json_get_string(if_descr, root_tok, "k8s_pod_namespace")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_k8s_pod_namespace, tvb, 0, 0, tmp_str);
+    
+    // add k8s pod UID
+    if ((tmp_str = json_get_string(if_descr, root_tok, "k8s_pod_uid")) != NULL)
+        proto_tree_add_string(tracee_network_capture_tree, hf_k8s_pod_uid, tvb, 0, 0, tmp_str);
 
 call_original_dissector:
     return call_dissector_only(null_dissector, tvb, pinfo, tree, data);

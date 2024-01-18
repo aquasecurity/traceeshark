@@ -11,31 +11,31 @@ static dissector_table_t event_name_dissector_table;
 static int hf_timestamp = -1;
 static int hf_thread_start_time = -1;
 static int hf_processor_id = -1;
-static int hf_process_id = -1;
+int hf_process_id = -1; // needs to be accessible by tracee network capture dissector
 static int hf_cgroup_id = -1;
 static int hf_thread_id = -1;
-static int hf_parent_process_id = -1;
+int hf_parent_process_id = -1; // needs to be accessible by tracee network capture dissector
 int hf_host_process_id = -1; // needs to be accessible by tracee network capture dissector
-static int hf_pid_col = -1;
+int hf_pid_col = -1; // needs to be accessible by tracee network capture dissector
 static int hf_tid_col = -1;
-static int hf_ppid_col = -1;
+int hf_ppid_col = -1; // needs to be accessible by tracee network capture dissector
 static int hf_host_thread_id = -1;
-static int hf_host_parent_process_id = -1;
+int hf_host_parent_process_id = -1; // needs to be accessible by tracee network capture dissector
 static int hf_user_id = -1;
 static int hf_mount_namespace = -1;
 static int hf_pid_namespace = -1;
-static int hf_process_name = -1;
+int hf_process_name = -1; // needs to be accessible by tracee network capture dissector
 static int hf_executable_path = -1;
 static int hf_hostname = -1;
-static int hf_container_id = -1;
-static int hf_container_name = -1;
-static int hf_container_image = -1;
+int hf_container_id = -1; // needs to be accessible by tracee network capture dissector
+int hf_container_name = -1; // needs to be accessible by tracee network capture dissector
+int hf_container_image = -1; // needs to be accessible by tracee network capture dissector
 static int hf_container_image_digest = -1;
 static int hf_is_container = -1;
-static int hf_container_col = -1;
-static int hf_k8s_pod_name = -1;
-static int hf_k8s_pod_namespace = -1;
-static int hf_k8s_pod_uid = -1;
+int hf_container_col = -1; // needs to be accessible by tracee network capture dissector
+int hf_k8s_pod_name = -1; // needs to be accessible by tracee network capture dissector
+int hf_k8s_pod_namespace = -1; // needs to be accessible by tracee network capture dissector
+int hf_k8s_pod_uid = -1; // needs to be accessible by tracee network capture dissector
 static int hf_event_id = -1;
 static int hf_event_name = -1;
 static int hf_is_signature = -1;
@@ -1442,7 +1442,7 @@ static proto_item *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, pr
     if ((metadata_tok = json_get_object(json_data, root_tok, "metadata")) == NULL)
         return NULL;
     
-    col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE-SIG");
+    col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE/SIG");
 
     metadata_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(metadata_item, "Metadata");
