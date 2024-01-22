@@ -1254,15 +1254,23 @@ static gboolean dissect_complex_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tre
 {
     wmem_array_t *arr;
     int i, len;
+    struct saved_arg saved_arg;
     gchar *str = NULL;
 
     // string array
     if (strcmp(arg_type, "const char*const*")   == 0 ||
             strcmp(arg_type, "const char**")    == 0) {
         if ((arr = add_string_array(tvb, pinfo, tree, *(hf->p_id), hf->hfinfo.name, hf->hfinfo.name, json_data, arg_tok, "value", TRUE)) != NULL) {
+            // add elements to saved args
+            len = wmem_array_get_count(arr);
+            for (i = 0; i < len; i++) {
+                saved_arg.type = ARG_STR;
+                saved_arg.val.str = *(gchar **)wmem_array_index(arr, i);
+                saved_args_add(hf, saved_arg);
+            }
+
             // argv array - add a field that displays all arguments together
             if (strcmp(hf->hfinfo.name, "argv") == 0) {
-                len = wmem_array_get_count(arr);
                 for (i = 0; i < len; i++) {
                     if (str == NULL)
                         str = wmem_strdup(pinfo->pool, *(gchar **)wmem_array_index(arr, i));
@@ -1316,14 +1324,7 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
     proto_item *args_item;
     proto_tree *args_tree;
     hf_register_info *hf;
-    union {
-        gint32 s32;
-        guint32 u32;
-        gint64 s64;
-        guint64 u64;
-        bool boolean;
-        gchar *str;
-    } val;
+    struct saved_arg saved_arg;
     gchar *arg_type, *arg_str;
     const gchar *info_col;
     proto_item *tmp_item;
@@ -1352,60 +1353,68 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                 case FT_INT8:
                 case FT_INT16:
                 case FT_INT32:
-                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
-                    proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, val.s32);
-                    arg_str = wmem_strdup_printf(pinfo->pool, "%d", val.s32);
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(saved_arg.val.s64)));
+                    saved_arg.type = ARG_S32;
+                    proto_tree_add_int(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.s32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%d", saved_arg.val.s32);
                     break;
                 
                 // small unsigned integer types
                 case FT_UINT8:
                 case FT_UINT16:
                 case FT_UINT32:
-                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
-                    proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
-                    arg_str = wmem_strdup_printf(pinfo->pool, "%u", val.u32);
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(saved_arg.val.s64)));
+                    saved_arg.type = ARG_U32;
+                    proto_tree_add_uint(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.u32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%u", saved_arg.val.u32);
                     break;
                 
                 // large signed integer
                 case FT_INT64:
-                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
-                    proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, val.s64);
-                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRId64 , val.s64);
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(saved_arg.val.s64)));
+                    saved_arg.type = ARG_S64;
+                    proto_tree_add_int64(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.s64);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRId64 , saved_arg.val.s64);
                     break;
                 
                 // large unsigned integer
                 case FT_UINT64:
-                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(val.s64)));
-                    proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, val.u64);
-                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRIu64 , val.u64);
+                    DISSECTOR_ASSERT(json_get_int_or_null(json_data, curr_arg, "value", &(saved_arg.val.s64)));
+                    saved_arg.type = ARG_U64;
+                    proto_tree_add_uint64(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.u64);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%" PRIu64 , saved_arg.val.u64);
                     break;
                 
                 // boolean
                 case FT_BOOLEAN:
-                    DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &(val.boolean)));
-                    proto_tree_add_boolean(args_tree, *(hf->p_id), tvb, 0, 0, val.u32);
-                    arg_str = wmem_strdup_printf(pinfo->pool, "%s", val.boolean ? "true" : "false");
+                    DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &(saved_arg.val.boolean)));
+                    saved_arg.type = ARG_BOOLEAN;
+                    proto_tree_add_boolean(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.u32);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%s", saved_arg.val.boolean ? "true" : "false");
                     break;
                 
                 // string
                 case FT_STRINGZ:
                     // try reading a string
-                    if ((val.str = json_get_string(json_data, curr_arg, "value")) != NULL) {
-                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, val.str);
-                        arg_str = val.str;
+                    if ((saved_arg.val.str = json_get_string(json_data, curr_arg, "value")) != NULL) {
+                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
+                        arg_str = saved_arg.val.str;
                     }
                     // no a string - try reading a null
                     else if (json_get_null(json_data, curr_arg, "value")) {
-                            proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "null");
-                            arg_str = "null";
+                            saved_arg.val.str = "null";
+                            proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
+                            arg_str = saved_arg.val.str;
                     }
                     // not a null - try reading a false
                     else {
-                        DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &val.boolean));
-                        DISSECTOR_ASSERT(val.boolean == false);
-                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, "false");
-                        arg_str = "false";
+                        DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &saved_arg.val.boolean));
+                        DISSECTOR_ASSERT(saved_arg.val.boolean == false);
+                        saved_arg.val.str = "false";
+                        proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
+                        arg_str = saved_arg.val.str;
                     }
+                    saved_arg.type = ARG_STR;
                     break;
                 
                 // unsupported types
@@ -1418,6 +1427,8 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                 default:
                     DISSECTOR_ASSERT_NOT_REACHED();
             }
+
+            saved_args_add(hf, saved_arg);
         }
 
         // add argument to info column
@@ -2448,6 +2459,8 @@ void proto_register_tracee(void)
     // register event name dissector table
     event_name_dissector_table = register_dissector_table("tracee.eventName",
         "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);
+    
+    register_tracee_postdissectors(proto_tracee);
 }
 
 void proto_reg_handoff_tracee(void)
@@ -2458,4 +2471,6 @@ void proto_reg_handoff_tracee(void)
     
     // register to encapsulation dissector table (we use a user-reserved encapsulation)
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);
+
+    register_tracee_postdissectors_wanted_fields();
 }
