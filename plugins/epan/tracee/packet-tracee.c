@@ -1,8 +1,8 @@
-#include "tracee.h"
 #include <epan/packet.h>
+#include <epan/ipproto.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
-#include <epan/ipproto.h>
+#include "tracee.h"
 
 static int proto_tracee = -1;
 
@@ -342,6 +342,12 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
         info->display = BASE_NONE;
     }
 
+    // u8
+    else if (strcmp(type, "u8") == 0) {
+        info->type = FT_UINT8;
+        info->display = BASE_DEC;
+    }
+
     // u16
     else if (strcmp(type, "umode_t")    == 0 ||
              strcmp(type, "u16")        == 0) {
@@ -362,14 +368,17 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     // u32
     else if (strcmp(type, "dev_t")          == 0 ||
              strcmp(type, "u32")            == 0 ||
-             strcmp(type, "unsigned int")   == 0) {
+             strcmp(type, "unsigned int")   == 0 ||
+             strcmp(type, "mode_t")         == 0) {
         
         info->type = FT_UINT32;
         info->display = BASE_DEC;
     }
 
     // s64
-    else if (strcmp(type, "long") == 0) {
+    else if (strcmp(type, "long")   == 0 ||
+             strcmp(type, "off_t")  == 0) {
+        
         info->type = FT_INT64;
         info->display = BASE_DEC;
     }
@@ -398,7 +407,19 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "[]trace.HookedSymbolData")           == 0 ||
              strcmp(type, "struct file_operations *")           == 0 ||
              strcmp(type, "const struct iovec*")                == 0 ||
-             strcmp(type, "trace.ProtoDNS")                     == 0) {
+             strcmp(type, "trace.ProtoDNS")                     == 0 ||
+             strcmp(type, "struct stat*")                       == 0 ||
+             strcmp(type, "const struct timespec*")             == 0 ||
+             strcmp(type, "struct utsname*")                    == 0 ||
+             strcmp(type, "struct rusage*")                     == 0 ||
+             strcmp(type, "struct linux_dirent*")               == 0 ||
+             strcmp(type, "struct statfs*")                     == 0 ||
+             strcmp(type, "struct sysinfo*")                    == 0 ||
+             strcmp(type, "const struct sigaction*")            == 0 ||
+             strcmp(type, "struct sigaction*")                  == 0 ||
+             strcmp(type, "struct robust_list_head*")           == 0 ||
+             strcmp(type, "sigset_t*")                          == 0 ||
+             strcmp(type, "struct rlimit*")                     == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
@@ -518,10 +539,9 @@ static wmem_array_t *add_string_array(tvbuff_t *tvb, packet_info *pinfo, proto_t
     int arr_len;
     wmem_array_t *arr_data = NULL;
 
-    // create the subtree
+    // create the item
     arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(arr_item, "%s", item_name);
-    arr_tree = proto_item_add_subtree(arr_item, ett_string_arr);
 
     // get array
     if ((arr_tok = json_get_array(json_data, parent_tok, arr_tok_name)) != NULL) {
@@ -533,8 +553,13 @@ static wmem_array_t *add_string_array(tvbuff_t *tvb, packet_info *pinfo, proto_t
         proto_item_append_text(arr_item, ": (null)");
         return NULL;
     }
-    else
-        DISSECTOR_ASSERT_NOT_REACHED();
+    else {
+        proto_item_set_hidden(arr_item);
+        return NULL;
+    }
+    
+    // create the subtree
+    arr_tree = proto_item_add_subtree(arr_item, ett_string_arr);
     
     if (get_data)
         arr_data = wmem_array_sized_new(pinfo->pool, sizeof(gchar *), arr_len);
@@ -569,16 +594,14 @@ static void dissect_process_lineage(tvbuff_t *tvb, packet_info *pinfo, proto_tre
     process_lineage_tree = proto_item_add_subtree(process_lineage_item, ett_process_lineage);
 
     // get process lineage array
-    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) != NULL)
-        DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
-    
-    // not an array - try getting a null
-    else if (json_get_null(json_data, arg_tok, "value")) {
+    if ((arr_tok = json_get_array(json_data, arg_tok, "value")) == NULL) {
+        // not an array - try getting a null
+        DISSECTOR_ASSERT(json_get_null(json_data, arg_tok, "value"));
         proto_item_append_text(process_lineage_item, ": (null)");
         return;
     }
-    else
-        DISSECTOR_ASSERT_NOT_REACHED();
+      
+    DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
     
     // save an array of processes in the process lineage
     process_arr = wmem_array_sized_new(pinfo->pool, sizeof(struct process_info), arr_len);
@@ -1330,11 +1353,13 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
     proto_item *tmp_item;
 
     DISSECTOR_ASSERT((args_tok = json_get_array(json_data, root_tok, "args")) != NULL);
-    DISSECTOR_ASSERT((nargs = json_get_array_len(args_tok)) > 0);
 
     args_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(args_item, "Args");
     args_tree = proto_item_add_subtree(args_item, ett_args);
+
+    if ((nargs = json_get_array_len(args_tok)) == 0)
+        proto_item_append_text(args_item, " (none)");
 
     // go through all arguments
     for (i = 0; i < nargs; i++) {
@@ -1400,19 +1425,24 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                         proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
                         arg_str = saved_arg.val.str;
                     }
-                    // no a string - try reading a null
+                    // not a string - try reading a null
                     else if (json_get_null(json_data, curr_arg, "value")) {
                             saved_arg.val.str = "null";
                             proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
                             arg_str = saved_arg.val.str;
                     }
                     // not a null - try reading a false
-                    else {
-                        DISSECTOR_ASSERT(json_get_boolean(json_data, curr_arg, "value", &saved_arg.val.boolean));
+                    else if (json_get_boolean(json_data, curr_arg, "value", &saved_arg.val.boolean)) {
                         DISSECTOR_ASSERT(saved_arg.val.boolean == false);
                         saved_arg.val.str = "false";
                         proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
                         arg_str = saved_arg.val.str;
+                    }
+                    // not a boolean - try getting an int (this is a special case for the
+                    // syscall arg of the sys_exit event, which can be either string or int)
+                    else {
+                        DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &saved_arg.val.s64));
+                        saved_arg.val.str = wmem_strdup_printf(pinfo->pool, "%" PRId64, saved_arg.val.s64);
                     }
                     saved_arg.type = ARG_STR;
                     break;
@@ -1500,8 +1530,8 @@ static proto_item *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, pr
     proto_tree_add_string(properties_tree, hf_metadata_properties_id, tvb, 0, 0, tmp_str);
 
     // add release
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, properties_tok, "release")) != NULL);
-    proto_tree_add_string(properties_tree, hf_metadata_properties_release, tvb, 0, 0, tmp_str);
+    if ((tmp_str = json_get_string(json_data, properties_tok, "release")) != NULL)
+        proto_tree_add_string(properties_tree, hf_metadata_properties_release, tvb, 0, 0, tmp_str);
 
     // add signature ID
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, properties_tok, "signatureID")) != NULL);
@@ -1515,7 +1545,7 @@ static proto_item *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, pr
     return metadata_item;
 }
 
-static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
+static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
 {
     int num_toks;
     jsmntok_t *root_tok, *tmp_tok;
@@ -1696,8 +1726,6 @@ static gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     // move arguments above metadata
     if (args_item && metadata_item)
         proto_tree_move_item(tree, args_item, metadata_item);
-
-    return event_name;
 }
 
 static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
@@ -1706,7 +1734,6 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     proto_tree *tracee_json_tree;
     guint len;
     gchar *json_data;
-    gchar *event_name _U_;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
 
@@ -1724,10 +1751,7 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     DISSECTOR_ASSERT_HINT(json_validate(json_data, len), "Invalid JSON");
 
     // dissect event fields
-    event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
-
-    // call dissector for this event
-    //dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree);
+    dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
 
     return tvb_captured_length(tvb);
 }

@@ -1,2 +1,6 @@
 .vscode/
 out.txt
+wireshark/
+build/
+wireshark-x64-libs/
+dist/

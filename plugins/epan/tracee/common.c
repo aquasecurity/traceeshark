@@ -474,7 +474,7 @@ bool json_get_int(char *buf, jsmntok_t *parent, const char *name, gint64 *val)
             cur->size == 1 && (cur+1)->type == JSMN_PRIMITIVE) {
             buf[(cur+1)->end] = '\0';
             errno = 0; // for some reason we have to clear errno manually, because it has an unrelated error stuck which isn't cleared
-            *val = strtoll(&buf[(cur+1)->start], NULL, 10);
+            *val = (gint64)strtoull(&buf[(cur+1)->start], NULL, 10);
             if (errno != 0)
                 return false;
             return true;
