@@ -8,10 +8,17 @@ To apply the Tracee configuration profile, which defines the custom column view 
 
 :warning: This method works only for Linux and Mac.
 
-Clone with the Wireshark submodule:
+Clone the repository:
 
 ```bash
-git clone --recurse-submodules git@bitbucket.org:scalock/traceeshark.git
+git clone git@bitbucket.org:scalock/traceeshark.git
+cd traceeshark
+```
+
+Clone the Wireshark source into the traceeshark directory (Makefile and build scripts depend on this location):
+
+```bash
+git clone https://github.com/wireshark/wireshark
 ```
 
 Before building for the first time, run `make cmake`.
@@ -23,5 +30,3 @@ After building, the plugin libraries will be placed in the wireshark subdirector
 These can be used with any Wireshark installation by placing them under `~/.local/lib/wireshark/plugins`.
 
 The `profiles/Tracee` folder which defines the custom view of columns and the coloring of events needs to be placed at `~/.config/wireshark/profiles/Tracee`. The `make run` command already places them there.
-
-
