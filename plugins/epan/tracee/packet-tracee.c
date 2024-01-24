@@ -369,7 +369,9 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     else if (strcmp(type, "dev_t")          == 0 ||
              strcmp(type, "u32")            == 0 ||
              strcmp(type, "unsigned int")   == 0 ||
-             strcmp(type, "mode_t")         == 0) {
+             strcmp(type, "mode_t")         == 0 ||
+             strcmp(type, "uid_t")          == 0 ||
+             strcmp(type, "gid_t")          == 0) {
         
         info->type = FT_UINT32;
         info->display = BASE_DEC;
