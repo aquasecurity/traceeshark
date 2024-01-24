@@ -36,6 +36,9 @@ build:
 install:
 	@mkdir -p ~/.config/wireshark
 	@cp -r profiles ~/.config/wireshark
+	@mkdir -p ~/.local/lib/wireshark/extcap
+	@cp extcap/tracee-record.py ~/.local/lib/wireshark/extcap
+	@chmod +x ~/.local/lib/wireshark/extcap/tracee-record.py
 
 # build and run
 run: all install
