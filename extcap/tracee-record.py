@@ -14,6 +14,7 @@ DLT_USER0 = 147
 TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
 
 container_id = None
+running = True
 
 
 def show_version():
@@ -30,7 +31,7 @@ def show_config():
 
     args.append((0, '--image', 'Docker image', 'Tracee docker image to use', 'string', '{required=true}{default=aquasec/tracee:latest}{group=Container options}'))
     args.append((1, '--name', 'Container name', 'Container name to use', 'string', '{default=tracee}{group=Container options}'))
-    args.append((2, '--docker-options', 'Docker options', 'Command line options for docker', 'string', '{default=--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro}{group=Container options}'))
+    args.append((2, '--docker-options', 'Docker options', 'Command line options for docker', 'string', '{default=--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock}{group=Container options}'))
 
     for arg in args:
         print("arg {number=%d}{call=%s}{display=%s}{tooltip=%s}{type=%s}%s" % arg)
@@ -70,6 +71,8 @@ def write_event(event, extcap_pipe):
 
 
 def read_output(logs_pipe, extcap_pipe):
+    global running
+
     # open tracee logs pipe and extcap pipe
     logs_pipe_f = os.open(logs_pipe, os.O_RDONLY, os.O_NONBLOCK)
     extcap_pipe_f = open(extcap_pipe, 'wb')
@@ -77,20 +80,8 @@ def read_output(logs_pipe, extcap_pipe):
     # write fake PCAP header
     extcap_pipe_f.write(get_fake_pcap_header())
 
-    # set up a poller for the logs pipe to detect if it has been closed (signifies that tracee has exited)
-    poller = select.poll()
-    poller.register(logs_pipe_f, select.POLLHUP)
-
-    # read events until the writer disconnects
-    while True:
-        # check if the writer disconnected
-        for descriptor, mask in poller.poll(0):
-            # can contain at most one element, but still:
-            if descriptor == logs_pipe_f and mask & select.POLLHUP:
-                os.close(logs_pipe_f)
-                extcap_pipe_f.close()
-                return
-        
+    # read events until the the capture stops
+    while running:
         # check if data is available
         rlist, _, _ = select.select([logs_pipe_f], [], [], 0.1)
 
@@ -100,10 +91,15 @@ def read_output(logs_pipe, extcap_pipe):
             write_event(event, extcap_pipe_f)
         else:
             continue
+    
+    os.close(logs_pipe_f)
+    extcap_pipe_f.close()
 
 
 def stop_capture(signum, frame):
-    global container_id
+    global running, container_id
+
+    running = False
 
     if container_id is None:
         sys.exit(0)
