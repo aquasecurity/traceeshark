@@ -49,19 +49,28 @@ def get_fake_pcap_header():
     header += struct.pack('<I', 0)  # Timezone
     header += struct.pack('<I', 0)  # Accuracy of timestamps
     header += struct.pack('<L', 0xffffffff)  # Max Length of capture frame
-    header += struct.pack('<L', DLT_USER0)  # Ethernet
+    header += struct.pack('<L', DLT_USER0)  # custom Tracee JSON encapsulation
     return header
+
+
+def parse_ts(event: str) -> int:
+    if not event.startswith(b'{"timestamp":'):
+        raise ValueError(f'invalid event: {event}')
+    
+    # skip {"timestamp": in the beginning of the event
+    return int(event[13: event.find(b',')])
 
 
 def write_event(event, extcap_pipe):
     packet = bytearray()
 
     caplen = len(event)
-    timestamp_secs = 0
-    timestamp_nsecs = 0
+    ts = parse_ts(event)
+    timestamp_secs = int(ts / 1000000000)
+    timestamp_usecs = int((ts % 1000000000) / 1000)
 
     packet += struct.pack('<L', timestamp_secs) # timestamp seconds
-    packet += struct.pack('<L', timestamp_nsecs)  # timestamp nanoseconds
+    packet += struct.pack('<L', timestamp_usecs)  # timestamp microseconds
     packet += struct.pack('<L', caplen)  # length captured
     packet += struct.pack('<L', caplen)  # length in frame
 
