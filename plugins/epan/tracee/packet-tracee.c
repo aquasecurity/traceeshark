@@ -1750,7 +1750,6 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     json_data = wmem_alloc(pinfo->pool, len + 1);
     tvb_memcpy(tvb, json_data, 0, len);
     json_data[len] = '\0';
-    DISSECTOR_ASSERT_HINT(json_validate(json_data, len), "Invalid JSON");
 
     // dissect event fields
     dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
