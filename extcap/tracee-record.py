@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
+from typing import Any, Dict, List, Optional
+
 import argparse
 from ctypes import cdll, byref, create_string_buffer
 import fcntl
+import json
 import os
 import select
+import shutil
 import signal
 import struct
 import subprocess as subp
@@ -17,6 +21,11 @@ TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
 TRACEE_OUTPUT_PIPE_CAPACITY = 131072 # enough to hold the largest event encountered so far
 READER_COMM = 'tracee-record'
 TRACEE_LOGS_PATH = '/tmp/tracee_logs.log'
+
+GENERAL_GROUP = 'General'
+CONTAINER_OPTIONS_GROUP = 'Container options'
+TRACEE_OPTIONS_GROUP = 'Tracee options'
+PRESET_GROUP = 'Preset control'
 
 DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
@@ -35,16 +44,133 @@ def show_interfaces():
     print("interface {value=record}{display=Tracee}")
 
 
-def show_config():
-    args = []
+class ConfigArg:
+    def __init__(self, number: int, call: str, display: str, type: str, **kwargs):
+        self.number = number
+        self.call = call
+        self.display = display
+        self.type = type
+        self.kwargs = kwargs
+    
+    def __str__(self) -> str:
+        string = 'arg {number=%d}{call=%s}{display=%s}{type=%s}' % (self.number, self.call, self.display, self.type)
+        for arg, val in self.kwargs.items():
+            string += '{%s=%s}' % (arg, str(val))
+        
+        return string
 
-    args.append((0, '--image', 'Docker image', 'Tracee docker image to use', 'string', '{required=true}{default=%s}{group=Container options}' % DEFAULT_TRACEE_IMAGE))
-    args.append((1, '--name', 'Container name', 'Container name to use', 'string', '{default=%s}{group=Container options}' % DEFAULT_CONTAINER_NAME))
-    args.append((2, '--docker-options', 'Docker options', 'Command line options for docker', 'string', '{default=%s}{group=Container options}' % DEFAULT_DOCKER_OPTIONS))
-    args.append((4, '--tracee-options', 'Tracee options', 'Command line options for tracee', 'string', '{group=Tracee options}'))
+
+class ConfigVal:
+    def __init__(self, arg: int, value: str, display: str, **kwargs):
+        self.arg = arg
+        self.value = value
+        self.display = display
+        self.kwargs = kwargs
+    
+    def __str__(self) -> str:
+        string = 'value {arg=%d}{value=%s}{display=%s}' % (self.arg, self.value, self.display)
+        for arg, val in self.kwargs.items():
+            string += '{%s=%s}' % (arg, str(val))
+        
+        return string
+
+
+def load_preset(preset: str) -> str:
+    preset_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets', preset)
+
+    with open(preset_file, 'r') as f:
+        return f.read().rstrip('\n').rstrip('\r')
+
+
+def get_effective_tracee_options(args: argparse.Namespace) -> str:
+    if args.preset != 'none':
+        return load_preset(args.preset)
+        
+    if args.override_tracee_options:
+        if args.custom_tracee_options is None:
+            return ''
+        return args.custom_tracee_options
+
+    raise NotImplementedError('tracee option selection not implemented yet')
+
+
+def get_settings() -> Optional[Dict[Any, Any]]:
+    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
+
+    try:
+        with open(settings_file, 'r') as f:
+            return json.loads(f.read())
+    except FileNotFoundError:
+        return None
+
+
+def get_presets() -> List[str]:
+    presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets')
+    os.makedirs(presets_dir, exist_ok=True)
+
+    presets = []
+    for filename in os.listdir(presets_dir):
+        presets.append(filename)
+    
+    return presets
+
+
+def show_config():
+    settings = get_settings() or {}
+    presets = get_presets()
+
+    args: List[ConfigArg] = [
+        ConfigArg(number=0, call='--image', display='Docker image', type='string',
+            tooltip='Tracee docker image',
+            required='true',
+            default=DEFAULT_TRACEE_IMAGE,
+            group=CONTAINER_OPTIONS_GROUP
+        ),
+        ConfigArg(number=1, call='--name', display='Container name', type='string',
+            default=DEFAULT_CONTAINER_NAME,
+            group=CONTAINER_OPTIONS_GROUP
+        ),
+        ConfigArg(number=2, call='--docker-options', display='Docker options', type='string',
+            tooltip='Command line options for docker',
+            default=DEFAULT_DOCKER_OPTIONS,
+            group=CONTAINER_OPTIONS_GROUP
+        ),
+        ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolflag',
+            tooltip='Use custom tracee options',
+            default='true' if settings.get('override_options') else 'false',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
+            tooltip='Command line options for tracee',
+            default=settings.get('custom_options') or '',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=5, call='--preset', display='Preset', type='selector',
+            tooltip='Tracee options preset',
+            group=PRESET_GROUP,
+            reload='true',
+            placeholder='Add selected file to presets'
+        ),
+        ConfigArg(number=6, call='--preset-file', display='Preset file', type='fileselect',
+            group=PRESET_GROUP
+        )
+    ]
+
+    values: List[ConfigVal] = [
+        ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)',
+            default='true' if settings.get('preset') == 'none' else 'false'
+        )
+    ]
+
+    # add all presets found
+    for preset in presets:
+        values.append(ConfigVal(arg=5, value=preset, display=preset, default='true' if settings.get('preset') == preset else 'false'))
 
     for arg in args:
-        print("arg {number=%d}{call=%s}{display=%s}{tooltip=%s}{type=%s}%s" % arg)
+        print(str(arg))
+    
+    for val in values:
+        print(str(val))
 
 
 def show_dlts():
@@ -162,6 +288,8 @@ def tracee_capture(args: argparse.Namespace):
         sys.stderr.write('no image or docker options provided')
         sys.exit(1)
     
+    tracee_options = get_effective_tracee_options(args)
+    
     # create pipe to get events from tracee
     try:
         os.remove(TRACEE_OUTPUT_PIPE)
@@ -178,11 +306,8 @@ def tracee_capture(args: argparse.Namespace):
         command += f' --name {args.name}'
     
     command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_PATH}:/logs.log:rw {args.image}'
-
-    if args.tracee_options and len(args.tracee_options) > 0:
-        command += f' {args.tracee_options}'
     
-    command += f" --scope comm!='{READER_COMM}' -o json:/output.pipe --log file:/logs.log"
+    command += f" {tracee_options} --scope comm!='{READER_COMM}' -o json:/output.pipe --log file:/logs.log"
 
     signal.signal(signal.SIGINT, stop_capture)
     signal.signal(signal.SIGTERM, stop_capture)
@@ -224,7 +349,43 @@ def tracee_capture(args: argparse.Namespace):
     if len(logs_err) > 0:
         sys.stderr.write(f'Tracee exited with error message:\n{logs_err.decode()}')
         sys.exit(1)
-        
+
+
+def handle_reload(option: str, args: argparse.Namespace):
+    # copy selected file to presets dir
+    if option == 'preset' and args.preset_file is not None:
+        presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets')
+        shutil.copyfile(args.preset_file, os.path.join(presets_dir, os.path.basename(args.preset_file)))
+
+
+def sync_settings(args: argparse.Namespace):
+    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
+    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+
+    try:
+        with open(settings_file, 'r') as f:
+            settings = json.loads(f.read())
+    except FileNotFoundError:
+        settings = {}
+    
+    settings['override_options'] = args.override_tracee_options
+
+    if args.custom_tracee_options is not None:
+        settings['custom_options'] = args.custom_tracee_options
+    
+    if args.preset is not None:
+        settings['preset'] = args.preset
+    else:
+        args.preset = settings.get('preset') or 'none'
+    
+    if 'preset' not in settings:
+        settings['preset'] = 'none'
+    
+    with open(settings_file, 'w') as f:
+        f.write(json.dumps(settings))
+    
+    return settings
+
 
 def main():
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Record events and packets using Tracee')
@@ -237,12 +398,16 @@ def main():
     parser.add_argument("--extcap-dlts", help="Provide a list of dlts for the given interface", action="store_true")
     parser.add_argument("--capture", help="Start the capture routine", action="store_true")
     parser.add_argument("--fifo", help="Use together with capture to provide the fifo to dump data to")
+    parser.add_argument("--extcap-reload-option", help="Reload elements for the given option")
 
     # custom arguments
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    parser.add_argument('--tracee-options', type=str)
+    parser.add_argument('--override-tracee-options', action='store_true')
+    parser.add_argument('--custom-tracee-options', type=str)
+    parser.add_argument('--preset', type=str)
+    parser.add_argument('--preset-file', type=str)
 
     args = parser.parse_args()
 
@@ -257,11 +422,15 @@ def main():
     if not args.extcap_interfaces and args.extcap_interface is None:
         parser.exit("An interface must be provided or the selection must be displayed")
     
+    if args.extcap_reload_option is not None:
+        handle_reload(args.extcap_reload_option, args)
+    
     if args.extcap_config:
         show_config()
     elif args.extcap_dlts:
         show_dlts()
     elif args.capture:
+        sync_settings(args)
         tracee_capture(args)
     
     sys.exit(0)
