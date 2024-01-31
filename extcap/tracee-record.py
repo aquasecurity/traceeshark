@@ -114,7 +114,7 @@ def get_presets() -> List[str]:
     return presets
 
 
-def show_config():
+def show_config(reload_option: Optional[str]):
     settings = get_settings() or {}
     presets = get_presets()
 
@@ -134,7 +134,7 @@ def show_config():
             default=DEFAULT_DOCKER_OPTIONS,
             group=CONTAINER_OPTIONS_GROUP
         ),
-        ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolflag',
+        ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolean',
             tooltip='Use custom tracee options',
             default='true' if settings.get('override_options') else 'false',
             group=TRACEE_OPTIONS_GROUP
@@ -148,25 +148,45 @@ def show_config():
             tooltip='Tracee options preset',
             group=PRESET_GROUP,
             reload='true',
-            placeholder='Add selected file to presets'
+            placeholder='Reload presets'
         ),
         ConfigArg(number=6, call='--preset-file', display='Preset file', type='fileselect',
             group=PRESET_GROUP
+        ),
+        ConfigArg(number=7, call='--preset-from-file', display='Update preset from file', type='selector',
+            tooltip='Update existing preset or create new preset from the above selected file',
+            group=PRESET_GROUP,
+            reload='true',
+            placeholder='Update'
+        ),
+        ConfigArg(number=8, call='--delete-preset', display='Delete preset', type='selector',
+            group=PRESET_GROUP,
+            reload='true',
+            placeholder='Delete'    
         )
     ]
 
-    values: List[ConfigVal] = [
-        ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)',
-            default='true' if settings.get('preset') == 'none' else 'false'
-        )
-    ]
+    values: List[ConfigVal] = []
 
-    # add all presets found
-    for preset in presets:
-        values.append(ConfigVal(arg=5, value=preset, display=preset, default='true' if settings.get('preset') == preset else 'false'))
+    if reload_option is None or reload_option == 'preset':
+        values.append(ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)',
+                default='true' if settings.get('preset') == 'none' else 'false'))
+        for preset in presets:
+            values.append(ConfigVal(arg=5, value=preset, display=preset, default='true' if settings.get('preset') == preset else 'false'))
+    
+    if reload_option is None or reload_option == 'preset-from-file':
+        values.append(ConfigVal(arg=7, value='new', display='New preset (uses file name)', default='true'))
+        for preset in presets:
+            values.append(ConfigVal(arg=7, value=preset, display=preset, default='false'))
+    
+    if reload_option is None or reload_option == 'delete-preset':
+        values.append(ConfigVal(arg=8, value='none', display='', default='true'))
+        for preset in presets:
+            values.append(ConfigVal(arg=8, value=preset, display=preset))
 
-    for arg in args:
-        print(str(arg))
+    if reload_option is None:
+        for arg in args:
+            print(str(arg))
     
     for val in values:
         print(str(val))
@@ -346,9 +366,14 @@ def tracee_capture(args: argparse.Namespace):
 
 def handle_reload(option: str, args: argparse.Namespace):
     # copy selected file to presets dir
-    if option == 'preset' and args.preset_file is not None:
+    if option == 'preset-from-file' and args.preset_file is not None:
         presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets')
-        shutil.copyfile(args.preset_file, os.path.join(presets_dir, os.path.basename(args.preset_file)))
+        dst_file = args.preset_from_file if args.preset_from_file != 'new' else args.preset_file
+        shutil.copyfile(args.preset_file, os.path.join(presets_dir, os.path.basename(dst_file)))
+    
+    elif option == 'delete-preset' and args.delete_preset is not None and args.delete_preset != 'none':
+        preset_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets', args.delete_preset)
+        os.remove(preset_file)
 
 
 def sync_settings(args: argparse.Namespace):
@@ -362,9 +387,7 @@ def sync_settings(args: argparse.Namespace):
         settings = {}
     
     settings['override_options'] = args.override_tracee_options
-
-    if args.custom_tracee_options is not None:
-        settings['custom_options'] = args.custom_tracee_options
+    settings['custom_options'] = args.custom_tracee_options
     
     if args.preset is not None:
         settings['preset'] = args.preset
@@ -397,10 +420,12 @@ def main():
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    parser.add_argument('--override-tracee-options', action='store_true')
+    parser.add_argument('--override-tracee-options', type=str)
     parser.add_argument('--custom-tracee-options', type=str)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
+    parser.add_argument('--preset-from-file', type=str)
+    parser.add_argument('--delete-preset', type=str)
 
     args = parser.parse_args()
 
@@ -415,11 +440,16 @@ def main():
     if not args.extcap_interfaces and args.extcap_interface is None:
         parser.exit("An interface must be provided or the selection must be displayed")
     
+    if not args.override_tracee_options:
+        args.override_tracee_options = False
+    else:
+        args.override_tracee_options = True if args.override_tracee_options == 'true' else False
+    
     if args.extcap_reload_option is not None:
         handle_reload(args.extcap_reload_option, args)
     
     if args.extcap_config:
-        show_config()
+        show_config(args.extcap_reload_option)
     elif args.extcap_dlts:
         show_dlts()
     elif args.capture:
