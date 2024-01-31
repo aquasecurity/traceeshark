@@ -480,6 +480,10 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     
     // field not registered yet - create it
     DISSECTOR_ASSERT((arg_type = json_get_string(json_data, arg_tok, "type")) != NULL);
+
+    // override for sepcific problematic fields which are supposed to be strings but are sometimes integers
+    if (strcmp(event_name, "security_file_open") == 0 && strcmp(arg_name, "flags") == 0)
+        arg_type = "string";
     
     // create the hf and add it to the array
     hf = g_new0(hf_register_info, 1);
@@ -1440,8 +1444,8 @@ static proto_item *dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tr
                         proto_tree_add_string(args_tree, *(hf->p_id), tvb, 0, 0, saved_arg.val.str);
                         arg_str = saved_arg.val.str;
                     }
-                    // not a boolean - try getting an int (this is a special case for the
-                    // syscall arg of the sys_exit event, which can be either string or int)
+                    // not a boolean - try getting an int (this is a special case for arguments
+                    // that are supposed to be strings but are sometimes integers)
                     else {
                         DISSECTOR_ASSERT(json_get_int(json_data, curr_arg, "value", &saved_arg.val.s64));
                         saved_arg.val.str = wmem_strdup_printf(pinfo->pool, "%" PRId64, saved_arg.val.s64);
