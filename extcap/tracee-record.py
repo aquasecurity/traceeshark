@@ -7,7 +7,6 @@ from ctypes import cdll, byref, create_string_buffer
 import fcntl
 import json
 import os
-import select
 import shutil
 import signal
 import struct
@@ -235,7 +234,7 @@ def read_output(logs_pipe, extcap_pipe):
     set_proc_name(READER_COMM)
 
     # open tracee logs pipe and extcap pipe
-    logs_pipe_f = os.open(logs_pipe, os.O_RDONLY, os.O_NONBLOCK)
+    logs_pipe_f = os.open(logs_pipe, os.O_RDONLY)
     fcntl.fcntl(logs_pipe_f, fcntl.F_SETPIPE_SZ, TRACEE_OUTPUT_PIPE_CAPACITY)
     extcap_pipe_f = open(extcap_pipe, 'wb')
 
@@ -244,19 +243,13 @@ def read_output(logs_pipe, extcap_pipe):
 
     # read events until the the capture stops
     while running:
-        # check if data is available
-        rlist, _, _ = select.select([logs_pipe_f], [], [], 0.1)
+        data = os.read(logs_pipe_f, TRACEE_OUTPUT_PIPE_CAPACITY)
 
-        # there is data available to read
-        if rlist:
-            data = os.read(logs_pipe_f, TRACEE_OUTPUT_PIPE_CAPACITY)
-
-            # split read data into individual events (TODO: this method might hurt perf, might want to search for newlines while reading)
-            for event in data.split(b'\n'):
-                if len(event) > 0:
-                    write_event(event, extcap_pipe_f)
-        else:
-            continue
+        # split read data into individual events (TODO: this method might hurt perf, might want to search for newlines while reading)
+        for event in data.split(b'\n'):
+            if len(event) > 0:
+                write_event(event, extcap_pipe_f)
+        extcap_pipe_f.flush()
     
     os.close(logs_pipe_f)
     extcap_pipe_f.close()
