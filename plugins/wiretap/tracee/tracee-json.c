@@ -66,11 +66,11 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
         goto fail;
 
     // no newline or null-terminator found
-    if (offset == max_read && buf[offset - 1] != '\n' && buf[offset -1] != 0 && buf[offset - 1] != -1)
+    if (offset == max_read && buf[offset - 1] != '\n' && buf[offset -1] != 0 && (int)buf[offset - 1] != -1)
         goto fail;
 
     // replace trailing newline or EOF marker with null-terminator
-    if (buf[offset - 1] == '\n' || buf[offset -1] == -1)
+    if (buf[offset - 1] == '\n' || (int)buf[offset -1] == -1)
         buf[offset -1] = 0;
     
     // line may have a linefeed preceding the newline, replace with null-terminator
@@ -104,7 +104,7 @@ static nstime_t *parse_ts(char *event)
         return NULL;
     
     // parse the timestamp to an int
-    errno = 0; // for some reason we have to clear errno manually, because it has an unrelated error stuck which isn't cleared
+    errno = 0;
     ts_int = g_ascii_strtoll(event + ts_start, NULL, 10);
     if (errno != 0)
         return NULL;
