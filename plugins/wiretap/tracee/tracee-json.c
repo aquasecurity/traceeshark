@@ -34,7 +34,7 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
 
     // start with a 1024-byte allocation
     gsize current_size = 1024;
-    gchar *buf = g_malloc(current_size);
+    signed char *buf = g_malloc(current_size);
 
     int tmp;
     gsize offset = 0;
@@ -54,7 +54,7 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
 
         tmp = file_getc(file);
 
-        buf[offset++] = (char)tmp;
+        buf[offset++] = (signed char)tmp;
 
         // newline or null-terminator found or failed to read (EOF)
         if (tmp == '\n' || tmp == 0 || tmp == -1)
@@ -66,18 +66,18 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
         goto fail;
 
     // no newline or null-terminator found
-    if (offset == max_read && buf[offset - 1] != '\n' && buf[offset -1] != 0 && (int)buf[offset - 1] != -1)
+    if (offset == max_read && buf[offset - 1] != '\n' && buf[offset -1] != 0 && buf[offset - 1] != -1)
         goto fail;
 
     // replace trailing newline or EOF marker with null-terminator
-    if (buf[offset - 1] == '\n' || (int)buf[offset -1] == -1)
+    if (buf[offset - 1] == '\n' || buf[offset -1] == -1)
         buf[offset -1] = 0;
     
     // line may have a linefeed preceding the newline, replace with null-terminator
     if (buf[offset - 2] == '\r')
         buf[offset - 2] = 0;
 
-    return buf;
+    return (gchar *)buf;
 
 fail:
     g_free(buf);
