@@ -304,11 +304,19 @@ def tracee_capture(args: argparse.Namespace):
     tracee_options = get_effective_tracee_options(args)
     
     # create pipe to get events from tracee
-    try:
-        os.remove(TRACEE_OUTPUT_PIPE)
-    except FileNotFoundError:
-        pass
+    if os.path.isdir(TRACEE_OUTPUT_PIPE):
+        os.rmdir(TRACEE_OUTPUT_PIPE)
+    else:
+        try:
+            os.remove(TRACEE_OUTPUT_PIPE)
+        except FileNotFoundError:
+            pass
     os.mkfifo(TRACEE_OUTPUT_PIPE)
+
+    # create file to get logs from tracee
+    if os.path.isdir(TRACEE_LOGS_PATH):
+        os.rmdir(TRACEE_LOGS_PATH)
+    open(TRACEE_LOGS_PATH, 'w').close()
 
     reader_th = Thread(target=read_output, args=(TRACEE_OUTPUT_PIPE, args.fifo), daemon=True)
     reader_th.start()
