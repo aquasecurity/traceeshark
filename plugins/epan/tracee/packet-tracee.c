@@ -421,7 +421,32 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "struct sigaction*")                  == 0 ||
              strcmp(type, "struct robust_list_head*")           == 0 ||
              strcmp(type, "sigset_t*")                          == 0 ||
-             strcmp(type, "struct rlimit*")                     == 0) {
+             strcmp(type, "struct rlimit*")                     == 0 ||
+             strcmp(type, "fd_set*")                            == 0 ||
+             strcmp(type, "struct epoll_event*")                == 0 ||
+             strcmp(type, "struct timespec*")                   == 0 ||
+             strcmp(type, "const sigset_t*")                    == 0 ||
+             strcmp(type, "struct msghdr*")                     == 0 ||
+             strcmp(type, "struct pollfd*")                     == 0 ||
+             strcmp(type, "const struct itimerspec*")           == 0 ||
+             strcmp(type, "struct statx*")                      == 0 ||
+             strcmp(type, "const stack_t*")                     == 0 ||
+             strcmp(type, "struct itimerspec*")                 == 0 ||
+             strcmp(type, "struct itimerval*")                  == 0 ||
+             strcmp(type, "union bpf_attr*")                    == 0 ||
+             strcmp(type, "struct perf_event_attr*")            == 0 ||
+             strcmp(type, "stack_t*")                           == 0 ||
+             strcmp(type, "cap_user_header_t")                  == 0 ||
+             strcmp(type, "const cap_user_data_t")              == 0 ||
+             strcmp(type, "const clockid_t")                    == 0 ||
+             strcmp(type, "cap_user_data_t")                    == 0 ||
+             strcmp(type, "const struct rlimit64*")             == 0 ||
+             strcmp(type, "struct rseq*")                       == 0 ||
+             strcmp(type, "int[2]")                             == 0 ||
+             strcmp(type, "struct linux_dirent64*")             == 0 ||
+             strcmp(type, "struct rlimit64*")                   == 0 ||
+             strcmp(type, "struct timex*")                      == 0 ||
+             strcmp(type, "const void*")                        == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
