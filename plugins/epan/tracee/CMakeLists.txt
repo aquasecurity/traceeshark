@@ -17,7 +17,7 @@ set(DISSECTOR_SRC
 	packet-tracee.c
 	packet-tracee-network-capture.c
 	postdissectors.c
-	extractors.c
+	wanted_fields.c
 )
 
 set(PLUGIN_FILES
