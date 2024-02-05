@@ -81,26 +81,24 @@ def load_preset(preset: str) -> str:
         return f.read().rstrip('\n').rstrip('\r')
 
 
-def get_effective_tracee_options(args: argparse.Namespace) -> str:
-    if args.preset != 'none':
-        return load_preset(args.preset)
+def get_effective_tracee_options(settings: Dict[str, Any]) -> str:
+    if settings.get('preset', 'none') != 'none':
+        return load_preset(settings.get('preset', 'none'))
         
-    if args.override_tracee_options:
-        if args.custom_tracee_options is None:
-            return ''
-        return args.custom_tracee_options
+    if settings.get('override_tracee_options'):
+        return settings.get('custom_tracee_options', '')
 
     raise NotImplementedError('tracee option selection not implemented yet')
 
 
-def get_settings() -> Optional[Dict[Any, Any]]:
+def get_settings() -> Dict[str, Any]:
     settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
 
     try:
         with open(settings_file, 'r') as f:
             return json.loads(f.read())
     except FileNotFoundError:
-        return None
+        return {}
 
 
 def get_presets() -> List[str]:
@@ -115,7 +113,7 @@ def get_presets() -> List[str]:
 
 
 def show_config(reload_option: Optional[str]):
-    settings = get_settings() or {}
+    settings = get_settings()
     presets = get_presets()
 
     args: List[ConfigArg] = [
@@ -136,12 +134,12 @@ def show_config(reload_option: Optional[str]):
         ),
         ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolean',
             tooltip='Use custom tracee options',
-            default='true' if settings.get('override_options') else 'false',
+            default='true' if settings.get('override_tracee_options') else 'false',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
             tooltip='Command line options for tracee',
-            default=settings.get('custom_options') or '',
+            default=settings.get('custom_tracee_options') or '',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(number=5, call='--preset', display='Preset', type='selector',
@@ -292,7 +290,7 @@ def stop_capture(signum, frame):
         sys.exit(1)
 
 
-def tracee_capture(args: argparse.Namespace):
+def tracee_capture(settings: Dict[str, Any], args: argparse.Namespace):
     if not args.fifo:
         sys.stderr.write('no output pipe provided')
         sys.exit(1)
@@ -301,7 +299,7 @@ def tracee_capture(args: argparse.Namespace):
         sys.stderr.write('no image or docker options provided')
         sys.exit(1)
     
-    tracee_options = get_effective_tracee_options(args)
+    tracee_options = get_effective_tracee_options(settings)
     
     # create pipe to get events from tracee
     if os.path.isdir(TRACEE_OUTPUT_PIPE):
@@ -326,9 +324,12 @@ def tracee_capture(args: argparse.Namespace):
     if len(args.name) > 0:
         command += f' --name {args.name}'
     
-    command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_PATH}:/logs.log:rw {args.image}'
+    command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_PATH}:/logs.log:rw {args.image} {tracee_options}'
+
+    # add exclusions that may spam the capture
+    command += f" --scope comm!='{READER_COMM}' --scope comm!=tracee --scope comm!=wireshark --scope comm!=dumpcap"
     
-    command += f" {tracee_options} --scope comm!='{READER_COMM}' -o json:/output.pipe --log file:/logs.log"
+    command += f" -o json:/output.pipe --log file:/logs.log"
 
     signal.signal(signal.SIGINT, stop_capture)
     signal.signal(signal.SIGTERM, stop_capture)
@@ -384,7 +385,7 @@ def handle_reload(option: str, args: argparse.Namespace):
         os.remove(preset_file)
 
 
-def sync_settings(args: argparse.Namespace):
+def update_settings(args: argparse.Namespace) -> Dict[str, Any]:
     settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
     os.makedirs(os.path.dirname(settings_file), exist_ok=True)
 
@@ -394,16 +395,9 @@ def sync_settings(args: argparse.Namespace):
     except FileNotFoundError:
         settings = {}
     
-    settings['override_options'] = args.override_tracee_options
-    settings['custom_options'] = args.custom_tracee_options
-    
-    if args.preset is not None:
-        settings['preset'] = args.preset
-    else:
-        args.preset = settings.get('preset') or 'none'
-    
-    if 'preset' not in settings:
-        settings['preset'] = 'none'
+    settings['override_tracee_options'] = args.override_tracee_options
+    settings['custom_tracee_options'] = args.custom_tracee_options
+    settings['preset'] = args.preset
     
     with open(settings_file, 'w') as f:
         f.write(json.dumps(settings))
@@ -412,6 +406,7 @@ def sync_settings(args: argparse.Namespace):
 
 
 def main():
+    defaults = get_settings()
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Record events and packets using Tracee')
 
     # extcap arguments
@@ -428,9 +423,9 @@ def main():
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    parser.add_argument('--override-tracee-options', type=str)
-    parser.add_argument('--custom-tracee-options', type=str)
-    parser.add_argument('--preset', type=str)
+    parser.add_argument('--override-tracee-options', type=str, default='true' if defaults.get('override_tracee_options') else 'false')
+    parser.add_argument('--custom-tracee-options', type=str, default=defaults.get('custom_tracee_options', ''))
+    parser.add_argument('--preset', type=str, default=defaults.get('preset', 'none'))
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
     parser.add_argument('--delete-preset', type=str)
@@ -461,8 +456,8 @@ def main():
     elif args.extcap_dlts:
         show_dlts()
     elif args.capture:
-        sync_settings(args)
-        tracee_capture(args)
+        settings = update_settings(args)
+        tracee_capture(settings, args)
     
     sys.exit(0)
 
