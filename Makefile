@@ -1,3 +1,5 @@
+OS_NAME := $(shell uname -s)
+
 # update wireshark source tree and build
 all: copy-source build
 
@@ -53,3 +55,15 @@ debug: all install
 cmake: copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
 	@cmake -G Ninja -S wireshark -B wireshark/build
+
+package: all
+	@rm -rf package
+	@mkdir package
+	@cp install.sh package/
+	@cp -r wireshark/build/run package/
+	@cp -r profiles package/
+	@if [ $(OS_NAME) = "Linux" ]; then\
+		cp -r extcap package/; \
+	fi
+	@cd package
+	@cd package && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .

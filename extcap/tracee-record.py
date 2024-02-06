@@ -314,6 +314,11 @@ def tracee_capture(settings: Dict[str, Any], args: argparse.Namespace):
     # create file to get logs from tracee
     if os.path.isdir(TRACEE_LOGS_PATH):
         os.rmdir(TRACEE_LOGS_PATH)
+    else:
+        try:
+            os.remove(TRACEE_LOGS_PATH)
+        except FileNotFoundError:
+            pass
     open(TRACEE_LOGS_PATH, 'w').close()
 
     reader_th = Thread(target=read_output, args=(TRACEE_OUTPUT_PIPE, args.fifo), daemon=True)
