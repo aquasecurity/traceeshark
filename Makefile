@@ -39,16 +39,16 @@ install:
 	@mkdir -p ~/.config/wireshark
 	@cp -r profiles ~/.config/wireshark
 	@mkdir -p ~/.local/lib/wireshark/extcap
-	@cp extcap/tracee-record.py ~/.local/lib/wireshark/extcap
-	@chmod +x ~/.local/lib/wireshark/extcap/tracee-record.py
-	@cp -r extcap/tracee-record ~/.local/lib/wireshark/extcap
+	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
+	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
+	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
 
 # build and run
-run: all install
+run: all
 	@wireshark/build/run/wireshark
 
 # build and run with debug logging
-debug: all install
+debug: all
 	@wireshark/build/run/wireshark --log-level DEBUG
 
 # prepare build directory (needed before building for the first time)

@@ -18,7 +18,7 @@ from threading import Thread
 DLT_USER0 = 147
 TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
 TRACEE_OUTPUT_PIPE_CAPACITY = 131072 # enough to hold the largest event encountered so far
-READER_COMM = 'tracee-record'
+READER_COMM = 'tracee-capture'
 TRACEE_LOGS_PATH = '/tmp/tracee_logs.log'
 
 GENERAL_GROUP = 'General'
@@ -40,7 +40,7 @@ def show_version():
 
 def show_interfaces():
     print("extcap {version=1.0}{help=https://www.wireshark.org}{display=Tracee}")
-    print("interface {value=record}{display=Tracee}")
+    print("interface {value=tracee}{display=Tracee local capture}")
 
 
 class ConfigArg:
@@ -75,7 +75,7 @@ class ConfigVal:
 
 
 def load_preset(preset: str) -> str:
-    preset_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets', preset)
+    preset_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets', preset)
 
     with open(preset_file, 'r') as f:
         return f.read().rstrip('\n').rstrip('\r')
@@ -85,14 +85,12 @@ def get_effective_tracee_options(settings: Dict[str, Any]) -> str:
     if settings.get('preset', 'none') != 'none':
         return load_preset(settings.get('preset', 'none'))
         
-    if settings.get('override_tracee_options'):
-        return settings.get('custom_tracee_options', '')
-
-    raise NotImplementedError('tracee option selection not implemented yet')
+    #if settings.get('override_tracee_options'):
+    return settings.get('custom_tracee_options', '')
 
 
 def get_settings() -> Dict[str, Any]:
-    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
+    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'settings.json')
 
     try:
         with open(settings_file, 'r') as f:
@@ -102,7 +100,7 @@ def get_settings() -> Dict[str, Any]:
 
 
 def get_presets() -> List[str]:
-    presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets')
+    presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets')
     os.makedirs(presets_dir, exist_ok=True)
 
     presets = []
@@ -132,11 +130,11 @@ def show_config(reload_option: Optional[str]):
             default=DEFAULT_DOCKER_OPTIONS,
             group=CONTAINER_OPTIONS_GROUP
         ),
-        ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolean',
+        """ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolean',
             tooltip='Use custom tracee options',
             default='true' if settings.get('override_tracee_options') else 'false',
             group=TRACEE_OPTIONS_GROUP
-        ),
+        )""",
         ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
             tooltip='Command line options for tracee',
             default=settings.get('custom_tracee_options') or '',
@@ -381,17 +379,17 @@ def tracee_capture(settings: Dict[str, Any], args: argparse.Namespace):
 def handle_reload(option: str, args: argparse.Namespace):
     # copy selected file to presets dir
     if option == 'preset-from-file' and args.preset_file is not None:
-        presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets')
+        presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets')
         dst_file = args.preset_from_file if args.preset_from_file != 'new' else args.preset_file
         shutil.copyfile(args.preset_file, os.path.join(presets_dir, os.path.basename(dst_file)))
     
     elif option == 'delete-preset' and args.delete_preset is not None and args.delete_preset != 'none':
-        preset_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'presets', args.delete_preset)
+        preset_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets', args.delete_preset)
         os.remove(preset_file)
 
 
 def update_settings(args: argparse.Namespace) -> Dict[str, Any]:
-    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-record', 'settings.json')
+    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'settings.json')
     os.makedirs(os.path.dirname(settings_file), exist_ok=True)
 
     try:
@@ -400,7 +398,7 @@ def update_settings(args: argparse.Namespace) -> Dict[str, Any]:
     except FileNotFoundError:
         settings = {}
     
-    settings['override_tracee_options'] = args.override_tracee_options
+    #settings['override_tracee_options'] = args.override_tracee_options
     settings['custom_tracee_options'] = args.custom_tracee_options
     settings['preset'] = args.preset
     
@@ -412,7 +410,8 @@ def update_settings(args: argparse.Namespace) -> Dict[str, Any]:
 
 def main():
     defaults = get_settings()
-    parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Record events and packets using Tracee')
+    defaults = {}
+    parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Capture events and packets using Tracee')
 
     # extcap arguments
     parser.add_argument("--extcap-interfaces", help="Provide a list of interfaces to capture from", action="store_true")
@@ -428,7 +427,7 @@ def main():
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    parser.add_argument('--override-tracee-options', type=str, default='true' if defaults.get('override_tracee_options') else 'false')
+    #parser.add_argument('--override-tracee-options', type=str, default='true' if defaults.get('override_tracee_options') else 'false')
     parser.add_argument('--custom-tracee-options', type=str, default=defaults.get('custom_tracee_options', ''))
     parser.add_argument('--preset', type=str, default=defaults.get('preset', 'none'))
     parser.add_argument('--preset-file', type=str)
@@ -448,10 +447,10 @@ def main():
     if not args.extcap_interfaces and args.extcap_interface is None:
         parser.exit("An interface must be provided or the selection must be displayed")
     
-    if not args.override_tracee_options:
+    """if not args.override_tracee_options:
         args.override_tracee_options = False
     else:
-        args.override_tracee_options = True if args.override_tracee_options == 'true' else False
+        args.override_tracee_options = True if args.override_tracee_options == 'true' else False"""
     
     if args.extcap_reload_option is not None:
         handle_reload(args.extcap_reload_option, args)
