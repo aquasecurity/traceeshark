@@ -509,6 +509,10 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     // override for sepcific problematic fields which are supposed to be strings but are sometimes integers
     if (strcmp(event_name, "security_file_open") == 0 && strcmp(arg_name, "flags") == 0)
         arg_type = "string";
+    else if (strcmp(event_name, "security_file_mprotect") == 0) {
+        if (strcmp(arg_name, "prot") == 0 || strcmp(arg_name, "prev_prot") == 0)
+            arg_type = "string";
+    }
     
     // create the hf and add it to the array
     hf = g_new0(hf_register_info, 1);

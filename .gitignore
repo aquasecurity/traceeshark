@@ -6,3 +6,4 @@ wireshark-x64-libs/
 dist/
 package/
 *.zip
+testing/
