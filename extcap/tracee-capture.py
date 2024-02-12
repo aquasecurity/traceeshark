@@ -81,22 +81,12 @@ def load_preset(preset: str) -> str:
         return f.read().rstrip('\n').rstrip('\r')
 
 
-def get_effective_tracee_options(settings: Dict[str, Any]) -> str:
-    if settings.get('preset', 'none') != 'none':
-        return load_preset(settings.get('preset', 'none'))
+def get_effective_tracee_options(args: argparse.Namespace) -> str:
+    if args.preset is not None and args.preset != 'none':
+        return load_preset(args.preset)
         
     #if settings.get('override_tracee_options'):
-    return settings.get('custom_tracee_options', '')
-
-
-def get_settings() -> Dict[str, Any]:
-    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'settings.json')
-
-    try:
-        with open(settings_file, 'r') as f:
-            return json.loads(f.read())
-    except FileNotFoundError:
-        return {}
+    return args.custom_tracee_options
 
 
 def get_presets() -> List[str]:
@@ -111,7 +101,6 @@ def get_presets() -> List[str]:
 
 
 def show_config(reload_option: Optional[str]):
-    settings = get_settings()
     presets = get_presets()
 
     args: List[ConfigArg] = [
@@ -137,7 +126,6 @@ def show_config(reload_option: Optional[str]):
         )""",
         ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
             tooltip='Command line options for tracee',
-            default=settings.get('custom_tracee_options') or '',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(number=5, call='--preset', display='Preset', type='selector',
@@ -165,10 +153,9 @@ def show_config(reload_option: Optional[str]):
     values: List[ConfigVal] = []
 
     if reload_option is None or reload_option == 'preset':
-        values.append(ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)',
-                default='true' if settings.get('preset') == 'none' else 'false'))
+        values.append(ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=5, value=preset, display=preset, default='true' if settings.get('preset') == preset else 'false'))
+            values.append(ConfigVal(arg=5, value=preset, display=preset, default='false'))
     
     if reload_option is None or reload_option == 'preset-from-file':
         values.append(ConfigVal(arg=7, value='new', display='New preset (uses file name)', default='true'))
@@ -288,7 +275,7 @@ def stop_capture(signum, frame):
         sys.exit(1)
 
 
-def tracee_capture(settings: Dict[str, Any], args: argparse.Namespace):
+def tracee_capture(args: argparse.Namespace):
     if not args.fifo:
         sys.stderr.write('no output pipe provided')
         sys.exit(1)
@@ -297,7 +284,7 @@ def tracee_capture(settings: Dict[str, Any], args: argparse.Namespace):
         sys.stderr.write('no image or docker options provided')
         sys.exit(1)
     
-    tracee_options = get_effective_tracee_options(settings)
+    tracee_options = get_effective_tracee_options(args)
     
     # create pipe to get events from tracee
     if os.path.isdir(TRACEE_OUTPUT_PIPE):
@@ -388,29 +375,7 @@ def handle_reload(option: str, args: argparse.Namespace):
         os.remove(preset_file)
 
 
-def update_settings(args: argparse.Namespace) -> Dict[str, Any]:
-    settings_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'settings.json')
-    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
-
-    try:
-        with open(settings_file, 'r') as f:
-            settings = json.loads(f.read())
-    except FileNotFoundError:
-        settings = {}
-    
-    #settings['override_tracee_options'] = args.override_tracee_options
-    settings['custom_tracee_options'] = args.custom_tracee_options
-    settings['preset'] = args.preset
-    
-    with open(settings_file, 'w') as f:
-        f.write(json.dumps(settings))
-    
-    return settings
-
-
 def main():
-    defaults = get_settings()
-    defaults = {}
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Capture events and packets using Tracee')
 
     # extcap arguments
@@ -428,8 +393,8 @@ def main():
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
     #parser.add_argument('--override-tracee-options', type=str, default='true' if defaults.get('override_tracee_options') else 'false')
-    parser.add_argument('--custom-tracee-options', type=str, default=defaults.get('custom_tracee_options', ''))
-    parser.add_argument('--preset', type=str, default=defaults.get('preset', 'none'))
+    parser.add_argument('--custom-tracee-options', type=str)
+    parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
     parser.add_argument('--delete-preset', type=str)
@@ -460,8 +425,7 @@ def main():
     elif args.extcap_dlts:
         show_dlts()
     elif args.capture:
-        settings = update_settings(args)
-        tracee_capture(settings, args)
+        tracee_capture(args)
     
     sys.exit(0)
 
