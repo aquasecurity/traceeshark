@@ -317,7 +317,8 @@ def tracee_capture(args: argparse.Namespace):
     command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_PATH}:/logs.log:rw {args.image} {tracee_options}'
 
     # add exclusions that may spam the capture
-    command += f" --scope comm!='{READER_COMM}' --scope comm!=tracee --scope comm!=wireshark --scope comm!=dumpcap"
+    if "comm=" not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
+        command += f" --scope comm!='{READER_COMM}' --scope comm!=tracee --scope comm!=wireshark --scope comm!=dumpcap"
     
     command += f" -o json:/output.pipe --log file:/logs.log"
 
