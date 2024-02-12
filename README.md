@@ -84,6 +84,14 @@ Clone the Wireshark source into the Traceeshark directory (Makefile and build sc
 git clone https://github.com/wireshark/wireshark
 ```
 
+Install dependencies as specified in the [Wireshark developer's guide](https://www.wireshark.org/docs/wsdg_html_chunked/ChapterSetup.html#ChSetupUNIXBuildEnvironmentSetup).
+
+For example, on Ubuntu:
+
+```bash
+sudo wireshark/tools/debian-setup.sh
+```
+
 Before building for the first time, run `make cmake`.
 
 To build only, use `make`. To install configuration and extcap, run `make install`. To build and run, use `make run`.
