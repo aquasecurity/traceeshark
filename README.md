@@ -12,21 +12,24 @@ Archives are available in the downloads section. Download the appropriate archiv
 unzip -d <destination folder> <archive>
 ```
 
-Then run the install script:
+Mark the install script as executable:
 
 ```bash
 cd <destination folder>
 chmod +x install.sh
+```
 
-# NOTE: installation is per user and root may be
-# required for using local live capture, so run
-# this on any user you will be using Traceeshark with
+Run the install script:
+
+:warning: NOTE: installation is per user and root may be required for using local live capture, so run this on any user you will be using Traceeshark with
+
+```bash
 ./install.sh
 ```
 
 You may need to install some libraries to run Wireshark.
 
-On Ubuntu:
+On Ubuntu 22.04 (Jammy):
 
 ```bash
 sudo apt install qt6-multimedia-dev libqt6core5compat6 libc-ares-dev
@@ -83,7 +86,7 @@ git clone https://github.com/wireshark/wireshark
 
 Before building for the first time, run `make cmake`.
 
-To build only, use `make`. To build and run, use `make run`.
+To build only, use `make`. To install configuration and extcap, run `make install`. To build and run, use `make run`.
 
 After building, the plugin libraries will be placed in the wireshark subdirectory at `wireshark/build/run/plugins/epan/tracee-epan.so.1` and `wireshark/build/run/plugins/wiretap/tracee-wtap.so.1`.
 

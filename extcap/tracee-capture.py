@@ -17,7 +17,7 @@ from threading import Thread
 
 DLT_USER0 = 147
 TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
-TRACEE_OUTPUT_PIPE_CAPACITY = 131072 # enough to hold the largest event encountered so far
+TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
 READER_COMM = 'tracee-capture'
 TRACEE_LOGS_PATH = '/tmp/tracee_logs.log'
 
