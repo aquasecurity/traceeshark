@@ -94,6 +94,8 @@ sudo wireshark/tools/debian-setup.sh
 
 Before building for the first time, run `make cmake`.
 
+:warning: If your system does not have a Qt 6 package available (e.g. Ubuntu 20.04 and older), run `make cmake USE_QT5=y` instead.
+
 To build only, use `make`. To install configuration and extcap, run `make install`. To build and run, use `make run`.
 
 After building, the plugin libraries will be placed in the wireshark subdirectory at `wireshark/build/run/plugins/epan/tracee-epan.so.1` and `wireshark/build/run/plugins/wiretap/tracee-wtap.so.1`.

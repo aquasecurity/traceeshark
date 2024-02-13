@@ -1,8 +1,11 @@
+#include <errno.h>
+
+#include "tracee.h"
+
 #include <epan/packet.h>
 #include <epan/ipproto.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
-#include "tracee.h"
 
 static int proto_tracee = -1;
 
@@ -305,13 +308,8 @@ struct type_display {
 
 static gchar *normalize_arg_name(const gchar *name)
 {
-    GString *new_name;
-
     // replace spaces with underscores
-    DISSECTOR_ASSERT((new_name = g_string_new(name)) != NULL);
-    g_string_replace(new_name, " ", "_", 0);
-
-    return g_string_free(new_name, FALSE);
+    return g_strdelimit(g_strdup(name), " ", '_');
 }
 
 /**

@@ -1,4 +1,7 @@
+#include <errno.h>
+
 #include "tracee.h"
+
 #include <wsutil/wsjson.h>
 #include <epan/ipproto.h>
 

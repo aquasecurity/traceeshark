@@ -54,7 +54,11 @@ debug: all
 # prepare build directory (needed before building for the first time)
 cmake: copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
+ifneq ($(USE_QT5),y)
 	@cmake -G Ninja -S wireshark -B wireshark/build
+else
+	@cmake -G Ninja -DUSE_qt6=OFF -S wireshark -B wireshark/build
+endif
 
 package: all
 	@rm -rf package

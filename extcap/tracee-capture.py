@@ -18,6 +18,7 @@ from threading import Thread
 DLT_USER0 = 147
 TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
 TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
+F_SETPIPE_SZ = 1031 # python < 3.10 does not have fcntl.F_SETPIPE_SZ
 READER_COMM = 'tracee-capture'
 TRACEE_LOGS_PATH = '/tmp/tracee_logs.log'
 
@@ -86,7 +87,7 @@ def get_effective_tracee_options(args: argparse.Namespace) -> str:
         return load_preset(args.preset)
         
     #if settings.get('override_tracee_options'):
-    return args.custom_tracee_options
+    return args.custom_tracee_options or ''
 
 
 def get_presets() -> List[str]:
@@ -238,7 +239,7 @@ def read_output(logs_pipe, extcap_pipe):
 
     # open tracee logs pipe and extcap pipe
     logs_pipe_f = os.open(logs_pipe, os.O_RDONLY)
-    fcntl.fcntl(logs_pipe_f, fcntl.F_SETPIPE_SZ, TRACEE_OUTPUT_PIPE_CAPACITY)
+    fcntl.fcntl(logs_pipe_f, F_SETPIPE_SZ, TRACEE_OUTPUT_PIPE_CAPACITY)
     extcap_pipe_f = open(extcap_pipe, 'wb')
 
     # write fake PCAP header
@@ -332,7 +333,7 @@ def tracee_capture(args: argparse.Namespace):
         sys.exit(1)
     
     global container_id
-    container_id = out.decode()
+    container_id = out.decode().rstrip('\n')
 
     command = f'docker wait {container_id}'
 
