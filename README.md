@@ -94,7 +94,7 @@ sudo wireshark/tools/debian-setup.sh
 
 Before building for the first time, run `make cmake`.
 
-:warning: If your system does not have a Qt 6 package available (e.g. Ubuntu 20.04 and older), run `make cmake USE_QT5=y` instead.
+:warning: If your system does not have a Qt6 package available (e.g. Ubuntu 20.04 and older), run `make cmake USE_QT5=y` instead.
 
 To build only, use `make`. To install configuration and extcap, run `make install`. To build and run, use `make run`.
 

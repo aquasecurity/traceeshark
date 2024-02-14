@@ -445,7 +445,11 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
              strcmp(type, "struct rlimit64*")                   == 0 ||
              strcmp(type, "struct timex*")                      == 0 ||
              strcmp(type, "const void*")                        == 0 ||
-             strcmp(type, "trace.ProtoICMP")                    == 0) {
+             strcmp(type, "trace.ProtoICMP")                    == 0 ||
+             strcmp(type, "struct timeval*")                    == 0 ||
+             strcmp(type, "struct siginfo*")                    == 0 ||
+             strcmp(type, "gid_t*")                             == 0 ||
+             strcmp(type, "struct clone_args*")                 == 0) {
         
         info->type = FT_NONE;
         info->display = BASE_NONE;
