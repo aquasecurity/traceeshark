@@ -5,21 +5,23 @@ all: copy-source build
 
 # copy only source files to wireshark source tree
 copy-source:
-	@if [ -d "wireshark/plugins/epan/tracee" ]; then \
-        cp plugins/epan/tracee/common.c wireshark/plugins/epan/tracee; \
-        cp plugins/epan/tracee/packet-tracee.c wireshark/plugins/epan/tracee; \
-        cp plugins/epan/tracee/packet-tracee-network-capture.c wireshark/plugins/epan/tracee; \
-        cp plugins/epan/tracee/postdissectors.c wireshark/plugins/epan/tracee; \
-        cp plugins/epan/tracee/wanted_fields.c wireshark/plugins/epan/tracee; \
-        cp plugins/epan/tracee/tracee.h wireshark/plugins/epan/tracee; \
+	@if [ -d "wireshark/plugins/epan/tracee-event" ]; then \
+        cp plugins/epan/common.h wireshark/plugins/epan; \
+        cp plugins/epan/wsjson_extensions.c wireshark/plugins/epan; \
+        cp plugins/epan/tracee-event/internal_defs.c wireshark/plugins/epan/tracee-event; \
+        cp plugins/epan/tracee-event/packet-tracee.c wireshark/plugins/epan/tracee-event; \
+        cp plugins/epan/tracee-event/postdissectors.c wireshark/plugins/epan/tracee-event; \
+        cp plugins/epan/tracee-event/wanted_fields.c wireshark/plugins/epan/tracee-event; \
+        cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
+        cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
     else \
-        error "Tracee plugin directory doesn't exist, run \"make cmake\" first."; \
+        error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
     fi
 
-	@if [ -d "wireshark/plugins/wiretap/tracee" ]; then \
-        cp plugins/wiretap/tracee/tracee-json.c wireshark/plugins/wiretap/tracee; \
+	@if [ -d "wireshark/plugins/wiretap/tracee-json" ]; then \
+        cp plugins/wiretap/tracee-json/tracee-json.c wireshark/plugins/wiretap/tracee-json; \
     else \
-        error "Tracee plugin directory doesn't exist, run \"make cmake\" first."; \
+        error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
     fi
 
 # copy all project files to wireshark source tree
@@ -31,7 +33,7 @@ build:
 	@if [ -d "wireshark/build" ]; then \
         ninja -C wireshark/build; \
     else \
-        echo "Build directory doesn't exist, run \"make cmake\" first."; \
+        error "Build directory doesn't exist, run \"make cmake\" first"; \
     fi
 
 # update private configuration profile

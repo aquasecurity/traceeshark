@@ -1,14 +1,37 @@
+#define WS_BUILD_DLL
+
+#include "wireshark.h"
+#include "../common.h"
+
 #include <epan/packet.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
+#include <wsutil/plugins.h>
 
-#include "tracee.h"
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
 
 static int proto_tracee_network_capture = -1;
 
+static int hf_process_id = -1;
+static int hf_parent_process_id = -1;
+static int hf_host_process_id = -1;
+static int hf_pid_col = -1;
+static int hf_ppid_col = -1;
+static int hf_host_parent_process_id = -1;
+static int hf_process_name = -1;
+static int hf_container_id = -1;
+static int hf_container_name = -1;
+static int hf_container_image = -1;
+static int hf_container_col = -1;
+static int hf_k8s_pod_name = -1;
+static int hf_k8s_pod_namespace = -1;
+static int hf_k8s_pod_uid = -1;
+
 static gint ett_tracee_network_capture = -1;
 
-static int dissect_null_override(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
+static int dissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
 {
     dissector_handle_t null_dissector;
     proto_tree *tracee_network_capture_tree;
@@ -30,7 +53,7 @@ static int dissect_null_override(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     section_number = pinfo->rec->presence_flags & WTAP_HAS_SECTION_NUMBER ? pinfo->rec->section_number : 0;
     if_descr = wmem_strdup(pinfo->pool, epan_get_interface_description(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id, section_number));
 
-    if (!json_validate(if_descr, strlen(if_descr)))
+    if (!json_validate((uint8_t *)if_descr, strlen(if_descr)))
         goto call_original_dissector;
     
     num_toks = json_parse(if_descr, NULL, 0);
@@ -129,7 +152,7 @@ call_original_dissector:
     return call_dissector_only(null_dissector, tvb, pinfo, tree, data);
 }
 
-void proto_register_null_override(void)
+void proto_register_tracee_network_capture(void)
 {
     static gint *ett[] = {
         &ett_tracee_network_capture
@@ -139,12 +162,48 @@ void proto_register_null_override(void)
     proto_register_subtree_array(ett, array_length(ett));
 }
 
-void proto_reg_handoff_null_override(void)
+void proto_reg_handoff_tracee_network_capture(void)
 {
     static dissector_handle_t tracee_network_capture_handle;
 
-    tracee_network_capture_handle = create_dissector_handle(dissect_null_override, proto_tracee_network_capture);
+    tracee_network_capture_handle = create_dissector_handle(dissect_tracee_network_capture, proto_tracee_network_capture);
     
     // override the Null/Loopback dissector's registration, so we can perform our dissection before it is invoked
     dissector_add_uint("wtap_encap", WTAP_ENCAP_NULL, tracee_network_capture_handle);
+
+    // get hf id for tracee event fields we need
+    hf_process_id = proto_registrar_get_id_byname("tracee.processId");
+    hf_parent_process_id = proto_registrar_get_id_byname("tracee.parentProcessId");
+    hf_host_process_id = proto_registrar_get_id_byname("tracee.hostProcessId");
+    hf_pid_col = proto_registrar_get_id_byname("tracee.pid_col");
+    hf_ppid_col = proto_registrar_get_id_byname("tracee.ppid_col");
+    hf_host_parent_process_id = proto_registrar_get_id_byname("tracee.hostParentProcessId");
+    hf_process_name = proto_registrar_get_id_byname("tracee.processName");
+    hf_container_id = proto_registrar_get_id_byname("tracee.container.id");
+    hf_container_name = proto_registrar_get_id_byname("tracee.container.name");
+    hf_container_image = proto_registrar_get_id_byname("tracee.container.image");
+    hf_container_col = proto_registrar_get_id_byname("tracee.container_col");
+    hf_k8s_pod_name = proto_registrar_get_id_byname("tracee.kubernetes.podName");
+    hf_k8s_pod_namespace = proto_registrar_get_id_byname("tracee.kubernetes.podNamespace");
+    hf_k8s_pod_uid = proto_registrar_get_id_byname("tracee.kubernetes.podUID");
 }
+
+static void plugin_register(void)
+{
+    static proto_plugin plugin;
+
+    plugin.register_protoinfo = proto_register_tracee_network_capture;
+    plugin.register_handoff = proto_reg_handoff_tracee_network_capture;
+    proto_register_plugin(&plugin);
+}
+
+static struct ws_module module = {
+    .flags = WS_PLUGIN_DESC_DISSECTOR,
+    .version = VERSION,
+    .spdx_id = "GPL-2.0-or-later",
+    .home_url = "",
+    .blurb = "Tracee network capture dissector",
+    .register_cb = &plugin_register,
+};
+
+WIRESHARK_PLUGIN_REGISTER_EPAN(&module, 0)

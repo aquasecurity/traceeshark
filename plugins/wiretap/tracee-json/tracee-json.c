@@ -1,7 +1,15 @@
+#define WS_BUILD_DLL
+
 #include <errno.h>
 
 #include "wtap-int.h"
 #include "file_wrappers.h"
+
+#include <wsutil/plugins.h>
+
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
 
 static int tracee_json_file_type_subtype;
 
@@ -187,8 +195,7 @@ cleanup:
 }
 
 static gboolean
-tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info,
-             gint64 *data_offset)
+tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info, gint64 *data_offset)
 {
     *data_offset = file_tell(wth->fh);
 
@@ -196,8 +203,7 @@ tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_in
 }
 
 static gboolean
-tracee_json_seek_read(wtap *wth, gint64 seek_off, wtap_rec *rec,
-                  Buffer *buf, int *err, gchar **err_info)
+tracee_json_seek_read(wtap *wth, gint64 seek_off, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info)
 {
     if (file_seek(wth->random_fh, seek_off, SEEK_SET, err) == -1)
 		return FALSE;
@@ -297,3 +303,22 @@ wtap_register_tracee_json(void)
 
     tracee_json_file_type_subtype = wtap_register_file_type_subtype(&tracee_json_info);
 }
+
+static void plugin_register(void)
+{
+    static wtap_plugin plugin;
+
+    plugin.register_wtap_module = wtap_register_tracee_json;
+    wtap_register_plugin(&plugin);
+}
+
+static struct ws_module module = {
+    .flags = WS_PLUGIN_DESC_FILE_TYPE,
+    .version = VERSION,
+    .spdx_id = "GPL-2.0-or-later",
+    .home_url = "",
+    .blurb = "Tracee JSON log reader",
+    .register_cb = &plugin_register,
+};
+
+WIRESHARK_PLUGIN_REGISTER_WIRETAP(&module, 0)

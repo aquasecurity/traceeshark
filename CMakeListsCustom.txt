@@ -11,8 +11,9 @@
 
 # Fail CMake stage if any of these plugins are missing from source tree
 set(CUSTOM_PLUGIN_SRC_DIR
-	plugins/wiretap/tracee
-	plugins/epan/tracee
+	plugins/epan/tracee-event
+    plugins/epan/tracee-network-capture
+	plugins/wiretap/tracee-json
 )
 
 # Do not fail CMake stage if any of the optional plugins are missing from source tree
