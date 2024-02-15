@@ -4,9 +4,9 @@
 
 :warning: Currently on Windows, Traceeshark must be built from source.
 
-Traceeshark can be installed using an archive containing prebuilt Wireshark.
+Traceeshark can be installed using an archive containing the plugins and other required files.
 
-Archives are available in the downloads section. Download the appropriate archive and unzip it:
+Archives are available in the downloads section, grouped per tag. Installations are per Wireshark version and may not work with other versions. Download the appropriate archive and unzip it:
 
 ```bash
 unzip -d <destination folder> <archive>
@@ -27,19 +27,7 @@ Run the install script:
 ./install.sh
 ```
 
-You may need to install some libraries to run Wireshark.
-
-On Ubuntu 22.04 (Jammy):
-
-```bash
-sudo apt install qt6-multimedia-dev libqt6core5compat6 libc-ares-dev
-```
-
-Finally, run Wireshark:
-
-```bash
-run/wireshark
-```
+Now the plugins should be available to your Wireshark installation.
 
 ## Basic usage
 
@@ -98,8 +86,6 @@ Before building for the first time, run `make cmake`.
 
 To build only, use `make`. To install configuration and extcap, run `make install`. To build and run, use `make run`.
 
-After building, the plugin libraries will be placed in the wireshark subdirectory at `wireshark/build/run/plugins/epan/tracee-epan.so.1` and `wireshark/build/run/plugins/wiretap/tracee-wtap.so.1`.
+### Plugin distribution
 
-These can be used with any Wireshark installation by placing them under `~/.local/lib/wireshark/plugins`.
-
-The `profiles/Tracee` folder which defines the custom view of columns and the coloring of events needs to be placed at `~/.config/wireshark/profiles/Tracee`. The `make run` command already places them there.
+The `make dist` target places all built plugins and other files into a zip archive with an install script, under the `dist` directory. The archive can be distributed and installed by anyone with the same OS and architecture. Plugin compatibility is not guaranteed with Wireshark versions different than the one they were compiled with. If you want to compile for a different Wireshark version, checkout that version from the Wireshark repository before building (source code compatibility not guaranteed, may result in compilation errors).
