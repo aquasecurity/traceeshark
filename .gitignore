@@ -3,7 +3,8 @@ out.txt
 wireshark/
 build/
 wireshark-x64-libs/
-dist/
 package/
 *.zip
 testing/
+dist/workdir
+dist/*.zip

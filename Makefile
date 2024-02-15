@@ -65,11 +65,24 @@ endif
 package: all
 	@rm -rf package
 	@mkdir package
-	@cp install.sh package/
+	@cp pkg-install.sh package/
 	@cp -r wireshark/build/run package/
 	@cp -r profiles package/
 	@if [ $(OS_NAME) = "Linux" ]; then\
 		cp -r extcap package/; \
 	fi
-	@cd package
 	@cd package && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+
+dist: all
+	@mkdir -p dist
+	@rm -rf dist/workdir
+	@mkdir dist/workdir
+	@cp dist/install.sh dist/workdir
+	@cp wireshark/build/run/tracee-event.so* dist/workdir
+	@cp wireshark/build/run/tracee-network-capture.so* dist/workdir
+	@cp wireshark/build/run/tracee-json.so* dist/workdir
+	@cp -r profiles dist/workdir
+	@if [ $(OS_NAME) = "Linux" ]; then\
+		cp -r extcap dist/workdir; \
+	fi
+	@cd dist/workdir && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-wireshark-$(shell cd wireshark && git describe --tags --abbrev=0)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
