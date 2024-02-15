@@ -1,11 +1,19 @@
+#define WS_BUILD_DLL
+
 #include <errno.h>
 
 #include "tracee.h"
+#include "../common.h"
 
 #include <epan/packet.h>
 #include <epan/ipproto.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
+#include <wsutil/plugins.h>
+
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
 
 static int proto_tracee = -1;
 
@@ -14,31 +22,31 @@ static dissector_table_t event_name_dissector_table;
 static int hf_timestamp = -1;
 static int hf_thread_start_time = -1;
 static int hf_processor_id = -1;
-int hf_process_id = -1; // needs to be accessible by tracee network capture dissector
+static int hf_process_id = -1;
 static int hf_cgroup_id = -1;
 static int hf_thread_id = -1;
-int hf_parent_process_id = -1; // needs to be accessible by tracee network capture dissector
-int hf_host_process_id = -1; // needs to be accessible by tracee network capture dissector
-int hf_pid_col = -1; // needs to be accessible by tracee network capture dissector
+static int hf_parent_process_id = -1;
+static int hf_host_process_id = -1;
+static int hf_pid_col = -1;
 static int hf_tid_col = -1;
-int hf_ppid_col = -1; // needs to be accessible by tracee network capture dissector
+static int hf_ppid_col = -1;
 static int hf_host_thread_id = -1;
-int hf_host_parent_process_id = -1; // needs to be accessible by tracee network capture dissector
+static int hf_host_parent_process_id = -1;
 static int hf_user_id = -1;
 static int hf_mount_namespace = -1;
 static int hf_pid_namespace = -1;
-int hf_process_name = -1; // needs to be accessible by tracee network capture dissector
+static int hf_process_name = -1;
 static int hf_executable_path = -1;
 static int hf_hostname = -1;
-int hf_container_id = -1; // needs to be accessible by tracee network capture dissector
-int hf_container_name = -1; // needs to be accessible by tracee network capture dissector
-int hf_container_image = -1; // needs to be accessible by tracee network capture dissector
+static int hf_container_id = -1;
+static int hf_container_name = -1;
+static int hf_container_image = -1;
 static int hf_container_image_digest = -1;
 static int hf_is_container = -1;
-int hf_container_col = -1; // needs to be accessible by tracee network capture dissector
-int hf_k8s_pod_name = -1; // needs to be accessible by tracee network capture dissector
-int hf_k8s_pod_namespace = -1; // needs to be accessible by tracee network capture dissector
-int hf_k8s_pod_uid = -1; // needs to be accessible by tracee network capture dissector
+static int hf_container_col = -1;
+static int hf_k8s_pod_name = -1;
+static int hf_k8s_pod_namespace = -1;
+static int hf_k8s_pod_uid = -1;
 static int hf_event_id = -1;
 static int hf_event_name = -1;
 static int hf_is_signature = -1;
@@ -2513,3 +2521,23 @@ void proto_reg_handoff_tracee(void)
     // register to encapsulation dissector table (we use a user-reserved encapsulation)
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);
 }
+
+static void plugin_register(void)
+{
+    static proto_plugin plugin;
+
+    plugin.register_protoinfo = proto_register_tracee;
+    plugin.register_handoff = proto_reg_handoff_tracee;
+    proto_register_plugin(&plugin);
+}
+
+static struct ws_module module = {
+    .flags = WS_PLUGIN_DESC_DISSECTOR,
+    .version = VERSION,
+    .spdx_id = "GPL-2.0-or-later",
+    .home_url = "",
+    .blurb = "Tracee event dissector",
+    .register_cb = &plugin_register,
+};
+
+WIRESHARK_PLUGIN_REGISTER_EPAN(&module, 0)
