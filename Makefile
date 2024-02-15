@@ -87,4 +87,4 @@ dist: all
 	fi
 	@echo $(shell cd wireshark && git describe --tags --abbrev=0) > dist/workdir/ws_version.txt
 	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+"))
-	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags)-wireshark-$(WS_VERSION_SHORT)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION_SHORT)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
