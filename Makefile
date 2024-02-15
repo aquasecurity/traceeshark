@@ -85,4 +85,6 @@ dist: all
 	@if [ $(OS_NAME) = "Linux" ]; then\
 		cp -r extcap dist/workdir; \
 	fi
-	@cd dist/workdir && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-wireshark-$(shell cd wireshark && git describe --tags --abbrev=0)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+	@echo $(shell cd wireshark && git describe --tags --abbrev=0) > dist/workdir/ws_version.txt
+	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+"))
+	@cd dist/workdir && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-wireshark-$(WS_VERSION_SHORT)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
