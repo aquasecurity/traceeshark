@@ -3,26 +3,6 @@
 wmem_map_t *wanted_fields = NULL;
 wmem_map_t *wanted_field_values = NULL;
 
-static void free_values_cb(gpointer key _U_, gpointer value, gpointer user_data _U_)
-{
-    fvalue_t *fv;
-    guint i;
-    wmem_array_t *arr = (wmem_array_t *)value;
-
-    for (i = 0; i < wmem_array_get_count(arr); i++) {
-        fv = *((fvalue_t **)wmem_array_index(arr, i));
-        fvalue_free(fv);
-    }
-}
-
-static bool wanted_field_values_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
-{
-    wmem_map_foreach(wanted_field_values, free_values_cb, NULL);
-
-    // return TRUE so this callback isn't unregistered
-    return TRUE;
-}
-
 void register_wanted_field(const gchar *filter_name)
 {
     gchar *key;
@@ -33,7 +13,6 @@ void register_wanted_field(const gchar *filter_name)
     if (wanted_fields == NULL) {
         wanted_fields = wmem_map_new(wmem_epan_scope(), g_str_hash, g_str_equal);
         wanted_field_values = wmem_map_new_autoreset(wmem_epan_scope(), wmem_packet_scope(), g_str_hash, g_str_equal);
-        wmem_register_callback(wmem_packet_scope(), wanted_field_values_destroy_cb, NULL);
     }
 
     // check if this field was already registered
@@ -50,24 +29,25 @@ wmem_array_t *wanted_field_get(const gchar *filter_name)
     return wmem_map_lookup(wanted_field_values, filter_name);
 }
 
-fvalue_t *wanted_field_get_one(const gchar *filter_name)
+struct field_value *wanted_field_get_one(const gchar *filter_name)
 {
     wmem_array_t *values = wanted_field_get(filter_name);
 
     if (values && wmem_array_get_count(values) >= 1)
-        return *((fvalue_t **)wmem_array_index(values, 0));
+        return *((struct field_value **)wmem_array_index(values, 0));
     
     return NULL;
 }
 
 const gchar *wanted_field_get_str(const gchar *filter_name)
 {
-    fvalue_t *fv;
+    struct field_value *fv;
 
     if ((fv = wanted_field_get_one(filter_name)) == NULL)
         return NULL;
     
-    return fvalue_get_string(fv);
+    DISSECTOR_ASSERT(fv->type == FIELD_TYPE_STRING);
+    return fv->val._string;
 }
 
 static gboolean field_is_wanted(header_field_info *hf)
@@ -84,7 +64,7 @@ static gboolean field_is_wanted(header_field_info *hf)
     return wmem_map_contains(wanted_fields, hf->abbrev);
 }
 
-#define handle_wanted_field(hfindex, value, fvalue_set_func) { \
+#define handle_wanted_field(hfindex, value, value_union_member) { \
     /* get field info */ \
     header_field_info *_hf = proto_registrar_get_nth(hfindex); \
     \
@@ -92,8 +72,8 @@ static gboolean field_is_wanted(header_field_info *hf)
     if (field_is_wanted(_hf)) { \
         \
         /* create value */ \
-        fvalue_t *_fv = fvalue_new(_hf->type); \
-        fvalue_set_func(_fv, value); \
+        struct field_value *_fv = wmem_new0(wmem_packet_scope(), struct field_value); \
+        _fv->val.value_union_member = value; \
         \
         /* check if a value for this field was added already */ \
         wmem_array_t *_values = wmem_map_lookup(wanted_field_values, _hf->abbrev); \
@@ -103,7 +83,7 @@ static gboolean field_is_wanted(header_field_info *hf)
             wmem_array_append_one(_values, _fv); \
         /* lookup failed - create new value array and insert it into the values map */ \
         else { \
-            _values = wmem_array_new(wmem_packet_scope(), sizeof(fvalue_t *)); \
+            _values = wmem_array_new(wmem_packet_scope(), sizeof(struct field_value *)); \
             wmem_array_append_one(_values, _fv); \
             wmem_map_insert(wanted_field_values, _hf->abbrev, _values); \
         } \
@@ -112,36 +92,36 @@ static gboolean field_is_wanted(header_field_info *hf)
 
 proto_item *proto_tree_add_int_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, gint32 value)
 {
-    handle_wanted_field(hfindex, value, fvalue_set_sinteger);
+    handle_wanted_field(hfindex, value, _int);
     return proto_tree_add_int(tree, hfindex, tvb, start, length, value);
 }
 
 proto_item *proto_tree_add_uint_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value)
 {    
-    handle_wanted_field(hfindex, value, fvalue_set_uinteger);
+    handle_wanted_field(hfindex, value, _uint);
     return proto_tree_add_uint(tree, hfindex, tvb, start, length, value);
 }
 
 proto_item *proto_tree_add_int64_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, gint64 value)
 {
-    handle_wanted_field(hfindex, value, fvalue_set_sinteger64);
+    handle_wanted_field(hfindex, value, _int64);
     return proto_tree_add_int64(tree, hfindex, tvb, start, length, value);
 }
 
 proto_item *proto_tree_add_uint64_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint64 value)
 {
-    handle_wanted_field(hfindex, value, fvalue_set_uinteger64);
+    handle_wanted_field(hfindex, value, _uint64);
     return proto_tree_add_uint64(tree, hfindex, tvb, start, length, value);
 }
 
 proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, const char* value)
 {
-    handle_wanted_field(hfindex, value, fvalue_set_string);
+    handle_wanted_field(hfindex, wmem_strdup(wmem_packet_scope(), value), _string);
     return proto_tree_add_string(tree, hfindex, tvb, start, length, value);
 }
 
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value)
 {
-    handle_wanted_field(hfindex, value, fvalue_set_uinteger64);
+    handle_wanted_field(hfindex, value, _boolean);
     return proto_tree_add_boolean(tree, hfindex, tvb, start, length, value);
 }

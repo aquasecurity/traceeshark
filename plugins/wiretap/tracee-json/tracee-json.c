@@ -11,6 +11,17 @@
 #define VERSION "0.1.0"
 #endif
 
+#ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
+WS_DLL_PUBLIC_DEF const char plugin_version[] = VERSION;
+WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
+WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
+
+WS_DLL_PUBLIC void plugin_register(void);
+#ifdef WS_PLUGIN_DESC_FILE_TYPE
+WS_DLL_PUBLIC uint32_t plugin_describe(void);
+#endif
+#endif
+
 static int tracee_json_file_type_subtype;
 
 int tracee_json_get_file_type_subtype(void)
@@ -304,7 +315,11 @@ wtap_register_tracee_json(void)
     tracee_json_file_type_subtype = wtap_register_file_type_subtype(&tracee_json_info);
 }
 
+#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
 static void plugin_register(void)
+#else
+void plugin_register(void)
+#endif
 {
     static wtap_plugin plugin;
 
@@ -312,6 +327,7 @@ static void plugin_register(void)
     wtap_register_plugin(&plugin);
 }
 
+#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
 static struct ws_module module = {
     .flags = WS_PLUGIN_DESC_FILE_TYPE,
     .version = VERSION,
@@ -322,3 +338,11 @@ static struct ws_module module = {
 };
 
 WIRESHARK_PLUGIN_REGISTER_WIRETAP(&module, 0)
+#endif
+
+#ifdef WS_PLUGIN_DESC_FILE_TYPE
+uint32_t plugin_describe(void)
+{
+    return WS_PLUGIN_DESC_FILE_TYPE;
+}
+#endif

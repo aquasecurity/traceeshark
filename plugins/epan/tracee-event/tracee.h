@@ -4,9 +4,30 @@ extern const value_string ipproto_val[];
 extern value_string_ext dns_types_vals_ext;
 extern const value_string dns_classes[];
 
+enum field_type {
+    FIELD_TYPE_INT,
+    FIELD_TYPE_UINT,
+    FIELD_TYPE_INT64,
+    FIELD_TYPE_UINT64,
+    FIELD_TYPE_STRING,
+    FIELD_TYPE_BOOLEAN
+};
+
+struct field_value {
+    enum field_type type;
+    union {
+        gint _int;
+        guint _uint;
+        gint64 _int64;
+        guint64 _uint64;
+        gchar *_string;
+        gboolean _boolean;
+    } val;
+};
+
 void register_wanted_field(const gchar *filter_name);
 wmem_array_t *wanted_field_get(const gchar *filter_name);
-fvalue_t *wanted_field_get_one(const gchar *filter_name);
+struct field_value *wanted_field_get_one(const gchar *filter_name);
 const gchar *wanted_field_get_str(const gchar *filter_name);
 
 proto_item *proto_tree_add_int_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, gint32 value);
