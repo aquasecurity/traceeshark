@@ -2,7 +2,7 @@
 out.txt
 wireshark/
 build/
-wireshark-x64-libs/
+wireshark-x64-libs*/
 package/
 *.zip
 testing/

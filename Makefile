@@ -44,6 +44,11 @@ install:
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
 	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
+	@mkdir -p ~/.local/lib/wireshark/plugins/epan
+	@cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/epan
+	@cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan
+	@mkdir -p ~/.local/lib/wireshark/plugins/wiretap
+	@cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap
 
 # build and run
 run: all
@@ -57,9 +62,9 @@ debug: all
 cmake: copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
 ifneq ($(USE_QT5),y)
-	@cmake -G Ninja -S wireshark -B wireshark/build
+	@cmake -G Ninja -DENABLE_CCACHE=Yes -S wireshark -B wireshark/build
 else
-	@cmake -G Ninja -DUSE_qt6=OFF -S wireshark -B wireshark/build
+	@cmake -G Ninja -DENABLE_CCACHE=Yes -DUSE_qt6=OFF -S wireshark -B wireshark/build
 endif
 
 package: all
@@ -74,7 +79,6 @@ package: all
 	@cd package && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
 
 dist: all
-	@mkdir -p dist
 	@rm -rf dist/workdir
 	@mkdir dist/workdir
 	@cp dist/install.sh dist/workdir
@@ -85,6 +89,6 @@ dist: all
 	@if [ $(OS_NAME) = "Linux" ]; then\
 		cp -r extcap dist/workdir; \
 	fi
-	@echo $(shell cd wireshark && git describe --tags --abbrev=0) > dist/workdir/ws_version.txt
-	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+"))
-	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION_SHORT)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+"))
+	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
+	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
