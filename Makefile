@@ -67,17 +67,6 @@ else
 	@cmake -G Ninja -DENABLE_CCACHE=Yes -DUSE_qt6=OFF -S wireshark -B wireshark/build
 endif
 
-package: all
-	@rm -rf package
-	@mkdir package
-	@cp pkg-install.sh package/
-	@cp -r wireshark/build/run package/
-	@cp -r profiles package/
-	@if [ $(OS_NAME) = "Linux" ]; then\
-		cp -r extcap package/; \
-	fi
-	@cd package && zip -r ../traceeshark-$(shell git rev-parse --short HEAD)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
-
 dist: all
 	@rm -rf dist/workdir
 	@mkdir dist/workdir
