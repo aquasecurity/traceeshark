@@ -8,7 +8,7 @@ Traceeshark can be installed using an archive containing the plugins and other r
 
 Archives are available in the downloads section. Installations are per Wireshark version and may not work with other versions. Download the appropriate archive and unzip it.
 
-On Linux:
+On Linux and Mac:
 
 ```bash
 unzip -d <destination folder> <archive>
