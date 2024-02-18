@@ -1,5 +1,26 @@
+#define WS_BUILD_DLL
+
+#include <errno.h>
+
 #include "wtap-int.h"
 #include "file_wrappers.h"
+
+#include <wsutil/plugins.h>
+
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
+
+#ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
+WS_DLL_PUBLIC_DEF const char plugin_version[] = VERSION;
+WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
+WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
+
+WS_DLL_PUBLIC void plugin_register(void);
+#ifdef WS_PLUGIN_DESC_FILE_TYPE
+WS_DLL_PUBLIC uint32_t plugin_describe(void);
+#endif
+#endif
 
 static int tracee_json_file_type_subtype;
 
@@ -34,7 +55,7 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
 
     // start with a 1024-byte allocation
     gsize current_size = 1024;
-    gchar *buf = g_malloc(current_size);
+    signed char *buf = g_malloc(current_size);
 
     int tmp;
     gsize offset = 0;
@@ -54,7 +75,7 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
 
         tmp = file_getc(file);
 
-        buf[offset++] = (char)tmp;
+        buf[offset++] = (signed char)tmp;
 
         // newline or null-terminator found or failed to read (EOF)
         if (tmp == '\n' || tmp == 0 || tmp == -1)
@@ -77,7 +98,7 @@ static gchar *file_gets_line(FILE_T file, gsize max_read)
     if (buf[offset - 2] == '\r')
         buf[offset - 2] = 0;
 
-    return buf;
+    return (gchar *)buf;
 
 fail:
     g_free(buf);
@@ -104,7 +125,7 @@ static nstime_t *parse_ts(char *event)
         return NULL;
     
     // parse the timestamp to an int
-    errno = 0; // for some reason we have to clear errno manually, because it has an unrelated error stuck which isn't cleared
+    errno = 0;
     ts_int = g_ascii_strtoll(event + ts_start, NULL, 10);
     if (errno != 0)
         return NULL;
@@ -185,8 +206,7 @@ cleanup:
 }
 
 static gboolean
-tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info,
-             gint64 *data_offset)
+tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info, gint64 *data_offset)
 {
     *data_offset = file_tell(wth->fh);
 
@@ -194,8 +214,7 @@ tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_in
 }
 
 static gboolean
-tracee_json_seek_read(wtap *wth, gint64 seek_off, wtap_rec *rec,
-                  Buffer *buf, int *err, gchar **err_info)
+tracee_json_seek_read(wtap *wth, gint64 seek_off, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info)
 {
     if (file_seek(wth->random_fh, seek_off, SEEK_SET, err) == -1)
 		return FALSE;
@@ -295,3 +314,35 @@ wtap_register_tracee_json(void)
 
     tracee_json_file_type_subtype = wtap_register_file_type_subtype(&tracee_json_info);
 }
+
+#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
+static void plugin_register(void)
+#else
+void plugin_register(void)
+#endif
+{
+    static wtap_plugin plugin;
+
+    plugin.register_wtap_module = wtap_register_tracee_json;
+    wtap_register_plugin(&plugin);
+}
+
+#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
+static struct ws_module module = {
+    .flags = WS_PLUGIN_DESC_FILE_TYPE,
+    .version = VERSION,
+    .spdx_id = "GPL-2.0-or-later",
+    .home_url = "",
+    .blurb = "Tracee JSON log reader",
+    .register_cb = &plugin_register,
+};
+
+WIRESHARK_PLUGIN_REGISTER_WIRETAP(&module, 0)
+#endif
+
+#ifdef WS_PLUGIN_DESC_FILE_TYPE
+uint32_t plugin_describe(void)
+{
+    return WS_PLUGIN_DESC_FILE_TYPE;
+}
+#endif
