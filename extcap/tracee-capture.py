@@ -271,6 +271,10 @@ def stop_capture(signum, frame):
 
     proc = subp.Popen(['/bin/sh', '-c', command], stdout=subp.PIPE, stderr=subp.PIPE)
     _, err = proc.communicate()
+
+    os.remove(TRACEE_OUTPUT_PIPE)
+    os.remove(TRACEE_LOGS_PATH)
+
     if proc.returncode != 0:
         sys.stderr.write(f'docker kill returned with error code {proc.returncode}, stderr dump:\n{err}')
         sys.exit(1)

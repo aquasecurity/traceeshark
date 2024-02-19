@@ -1,19 +1,19 @@
 #define WS_BUILD_DLL
 
-#include "wireshark.h"
 #include "../common.h"
 
 #include <epan/packet.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
 #include <wsutil/plugins.h>
+#include <ws_version.h>
 
-#ifndef VERSION
-#define VERSION "0.1.0"
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION "0.1.0"
 #endif
 
 #ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
-WS_DLL_PUBLIC_DEF const char plugin_version[] = VERSION;
+WS_DLL_PUBLIC_DEF const char plugin_version[] = PLUGIN_VERSION;
 WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
 WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
 
@@ -42,9 +42,25 @@ static int hf_k8s_pod_uid = -1;
 
 static gint ett_tracee_network_capture = -1;
 
-static int dissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
+void find_first_item(proto_node *curr_item, void *data)
 {
-    dissector_handle_t null_dissector;
+    proto_item **out_item = (proto_item **)data;
+
+    if (*out_item == NULL)
+        *out_item = curr_item;
+}
+
+proto_item *get_first_item(proto_tree *tree)
+{
+    proto_item *first_item = NULL;
+
+    proto_tree_children_foreach(tree, find_first_item, &first_item);
+
+    return first_item;
+}
+
+static int postdissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
+{
     proto_tree *tracee_network_capture_tree;
     proto_item *tracee_network_capture_item, *tmp_item;
     char *if_descr;
@@ -54,21 +70,31 @@ static int dissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo, pro
     gint32 pid = -1, ns_pid = -1, ppid = -1, ns_ppid = -1;
     gchar *tmp_str, *container_id, *container_image, *pid_col_str, *ppid_col_str, *container_col_str;
     
-    DISSECTOR_ASSERT_HINT((null_dissector = find_dissector("null")) != NULL, "Cannot find Null/Loopback dissector");
+    // make sure this is a packet recorded by Tracee
+#if (WIRESHARK_VERSION_MAJOR > 4 || (WIRESHARK_VERSION_MAJOR == 4 && WIRESHARK_VERSION_MINOR >= 3))
+    guint section_number = pinfo->rec->presence_flags & WTAP_HAS_SECTION_NUMBER ? pinfo->rec->section_number : 0;
+    if (strcmp(epan_get_interface_name(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id, section_number), "tracee") != 0)
+#else
+    if (strcmp(epan_get_interface_name(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id), "tracee") != 0)
+#endif
+        return 0;
 
     // create tracee network capture tree
     tracee_network_capture_item = proto_tree_add_item(tree, proto_tracee_network_capture, tvb, 0, -1, ENC_NA);
     tracee_network_capture_tree = proto_item_add_subtree(tracee_network_capture_item, ett_tracee_network_capture);
 
+    // move tracee network capture item below frame item
+    tmp_item = get_first_item(tree);
+    proto_tree_move_item(tree, tmp_item, tracee_network_capture_item);
+
 #if (WIRESHARK_VERSION_MAJOR > 4 || (WIRESHARK_VERSION_MAJOR == 4 && WIRESHARK_VERSION_MINOR >= 3))
-    guint section_number = pinfo->rec->presence_flags & WTAP_HAS_SECTION_NUMBER ? pinfo->rec->section_number : 0;
     if_descr = wmem_strdup(pinfo->pool, epan_get_interface_description(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id, section_number));
 #else
     if_descr = wmem_strdup(pinfo->pool, epan_get_interface_description(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id));
 #endif
 
-    if (!json_validate((uint8_t *)if_descr, strlen(if_descr)))
-        goto call_original_dissector;
+    if (!json_validate((guint8 *)if_descr, strlen(if_descr)))
+        return 0;
     
     num_toks = json_parse(if_descr, NULL, 0);
     DISSECTOR_ASSERT_HINT(num_toks > 0, "JSON decode error: non-positive num_toks");
@@ -162,29 +188,26 @@ static int dissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo, pro
     if ((tmp_str = json_get_string(if_descr, root_tok, "k8s_pod_uid")) != NULL)
         proto_tree_add_string(tracee_network_capture_tree, hf_k8s_pod_uid, tvb, 0, 0, tmp_str);
 
-call_original_dissector:
-    return call_dissector_only(null_dissector, tvb, pinfo, tree, data);
+    return 0;
 }
 
 void proto_register_tracee_network_capture(void)
 {
+    dissector_handle_t tracee_network_capture_handle;
+
     static gint *ett[] = {
         &ett_tracee_network_capture
     };
 
     proto_tracee_network_capture = proto_register_protocol("Tracee Network Capture", "TRACEE-NETWORK-CAPTURE", "tracee-network-capture");
     proto_register_subtree_array(ett, array_length(ett));
+
+    tracee_network_capture_handle = register_dissector("tracee-network-capture", postdissect_tracee_network_capture, proto_tracee_network_capture);
+    register_postdissector(tracee_network_capture_handle);
 }
 
 void proto_reg_handoff_tracee_network_capture(void)
 {
-    static dissector_handle_t tracee_network_capture_handle;
-
-    tracee_network_capture_handle = create_dissector_handle(dissect_tracee_network_capture, proto_tracee_network_capture);
-    
-    // override the Null/Loopback dissector's registration, so we can perform our dissection before it is invoked
-    dissector_add_uint("wtap_encap", WTAP_ENCAP_NULL, tracee_network_capture_handle);
-
     // get hf id for tracee event fields we need
     hf_process_id = proto_registrar_get_id_byname("tracee.processId");
     hf_parent_process_id = proto_registrar_get_id_byname("tracee.parentProcessId");
@@ -218,7 +241,7 @@ void plugin_register(void)
 #ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
 static struct ws_module module = {
     .flags = WS_PLUGIN_DESC_DISSECTOR,
-    .version = VERSION,
+    .version = PLUGIN_VERSION,
     .spdx_id = "GPL-2.0-or-later",
     .home_url = "",
     .blurb = "Tracee network capture dissector",
