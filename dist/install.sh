@@ -30,4 +30,9 @@ if [ "$os_name" == "Linux" ]; then
     cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap/
     chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
     cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap/
+
+    mkdir -p ~/.config/wireshark/extcap
+    cp extcap/tracee-capture.py ~/.config/wireshark/extcap/
+    chmod +x ~/.config/wireshark/extcap/tracee-capture.py
+    cp -r extcap/tracee-capture ~/.config/wireshark/extcap/
 fi

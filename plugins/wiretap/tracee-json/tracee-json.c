@@ -1,18 +1,21 @@
 #define WS_BUILD_DLL
 
 #include <errno.h>
+#include <inttypes.h>
 
 #include "wtap-int.h"
 #include "file_wrappers.h"
 
 #include <wsutil/plugins.h>
+#include <wsutil/wslog.h>
+#include <ws_version.h>
 
-#ifndef VERSION
-#define VERSION "0.1.0"
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION "0.1.0"
 #endif
 
 #ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
-WS_DLL_PUBLIC_DEF const char plugin_version[] = VERSION;
+WS_DLL_PUBLIC_DEF const char plugin_version[] = PLUGIN_VERSION;
 WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
 WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
 
@@ -330,7 +333,7 @@ void plugin_register(void)
 #ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
 static struct ws_module module = {
     .flags = WS_PLUGIN_DESC_FILE_TYPE,
-    .version = VERSION,
+    .version = PLUGIN_VERSION,
     .spdx_id = "GPL-2.0-or-later",
     .home_url = "",
     .blurb = "Tracee JSON log reader",

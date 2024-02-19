@@ -38,17 +38,49 @@ build:
 
 # update private configuration profile
 install:
+	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+"))
 	@mkdir -p ~/.config/wireshark
 	@cp -r profiles ~/.config/wireshark
+	
 	@mkdir -p ~/.local/lib/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
 	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
+
+	@mkdir -p ~/.config/wireshark/extcap
+	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
+	@chmod +x ~/.config/wireshark/extcap/tracee-capture.py
+	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
+
 	@mkdir -p ~/.local/lib/wireshark/plugins/epan
-	@cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/epan
-	@cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan
+	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan
+
+	@if [ -e "wireshark/build/run/tracee-event" ]; then \
+		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/epan/tracee-event.so; \
+		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan/tracee-event.so; \
+	else \
+		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/epan; \
+		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan; \
+	fi
+
+	@if [ -e "wireshark/build/run/tracee-network-capture" ]; then \
+		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/epan/tracee-network-capture.so; \
+		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan/tracee-network-capture.so; \
+	else \
+		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan; \
+		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan; \
+	fi
+
 	@mkdir -p ~/.local/lib/wireshark/plugins/wiretap
-	@cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap
+	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap
+
+	@if [ -e "wireshark/build/run/tracee-json" ]; then \
+		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/wiretap/tracee-json.so; \
+		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap/tracee-json.so; \
+	else \
+		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap; \
+		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap; \
+	fi
 
 # build and run
 run: all
@@ -71,9 +103,25 @@ dist: all
 	@rm -rf dist/workdir
 	@mkdir dist/workdir
 	@cp dist/install.sh dist/workdir
-	@cp wireshark/build/run/tracee-event.so* dist/workdir
-	@cp wireshark/build/run/tracee-network-capture.so* dist/workdir
-	@cp wireshark/build/run/tracee-json.so* dist/workdir
+
+	@if [ -e "wireshark/build/run/tracee-event" ]; then \
+		cp wireshark/build/run/tracee-event dist/workdir/tracee-event.so; \
+	else \
+		cp wireshark/build/run/tracee-event.so* dist/workdir; \
+	fi
+
+	@if [ -e "wireshark/build/run/tracee-network-capture" ]; then \
+		cp wireshark/build/run/tracee-network-capture dist/workdir/tracee-network-capture.so; \
+	else \
+		cp wireshark/build/run/tracee-network-capture.so* dist/workdir; \
+	fi
+	
+	@if [ -e "wireshark/build/run/tracee-json" ]; then \
+		cp wireshark/build/run/tracee-json dist/workdir/tracee-json.so; \
+	else \
+		cp wireshark/build/run/tracee-json.so* dist/workdir; \
+	fi
+	
 	@cp -r profiles dist/workdir
 	@if [ $(OS_NAME) = "Linux" ]; then\
 		cp -r extcap dist/workdir; \

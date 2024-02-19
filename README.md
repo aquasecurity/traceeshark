@@ -22,8 +22,6 @@ powershell -executionpolicy bypass -File .\install.ps1
 
 On Linux:
 
-:warning: NOTE: installation is per user and root may be required for using local live capture, so run this on any user you will be using Traceeshark with
-
 ```bash
 cd <destination folder>
 chmod +x install.sh
@@ -31,6 +29,8 @@ chmod +x install.sh
 ```
 
 Now the plugins should be available using your installed Wireshark.
+
+:warning: NOTE: installation is per user and root may be required for using local live capture, so run the install script on any user you will be using Traceeshark with. As an additional note, currently personal plugins will not be loaded if Wireshark is started as root, so there are 2 options for using local live capture: either add your user to the docker group so root privileges are not required, or copy the plugins to the global plugins folder (in Wireshark, see `Help -> About Wireshark -> Folders`).
 
 ## Basic usage
 
@@ -140,7 +140,7 @@ Next, install Wireshark's headers.
 On Linux and Mac:
 
 ```bash
-sudo ninja install-headers
+sudo make install-headers
 ```
 
 On Windows (requires an elevated command prompt):

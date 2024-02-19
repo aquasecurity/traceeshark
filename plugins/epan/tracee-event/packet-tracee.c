@@ -1,6 +1,7 @@
 #define WS_BUILD_DLL
 
 #include <errno.h>
+#include <inttypes.h>
 
 #include "tracee.h"
 #include "../common.h"
@@ -10,13 +11,15 @@
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
 #include <wsutil/plugins.h>
+#include <wsutil/wslog.h>
+#include <ws_version.h>
 
-#ifndef VERSION
-#define VERSION "0.1.0"
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION "0.1.0"
 #endif
 
 #ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
-WS_DLL_PUBLIC_DEF const char plugin_version[] = VERSION;
+WS_DLL_PUBLIC_DEF const char plugin_version[] = PLUGIN_VERSION;
 WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
 WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
 
@@ -223,7 +226,7 @@ static void free_dynamic_hf(gpointer key _U_, gpointer value, gpointer user_data
     proto_add_deregistered_data(hf_ptrs);
 }
 
-static bool dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
+static gboolean dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
 {
     wmem_map_foreach(event_dynamic_hf_map, free_dynamic_hf, NULL);
 
@@ -2549,7 +2552,7 @@ void plugin_register(void)
 #ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
 static struct ws_module module = {
     .flags = WS_PLUGIN_DESC_DISSECTOR,
-    .version = VERSION,
+    .version = PLUGIN_VERSION,
     .spdx_id = "GPL-2.0-or-later",
     .home_url = "",
     .blurb = "Tracee event dissector",

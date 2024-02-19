@@ -1,6 +1,7 @@
 #include <errno.h>
 
-#include <wireshark.h>
+#include "common.h"
+
 #include <wsutil/wsjson.h>
 
 /*

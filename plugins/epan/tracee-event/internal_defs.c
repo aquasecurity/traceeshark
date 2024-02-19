@@ -1,3 +1,4 @@
+#include <epan/value_string.h>
 #include <epan/ipproto.h>
 
 const value_string ipproto_val[] = {

@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #include <wsutil/wsjson.h>
 
 jsmntok_t *json_get_next_object(jsmntok_t *cur);

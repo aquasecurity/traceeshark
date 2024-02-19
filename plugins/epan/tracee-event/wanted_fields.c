@@ -1,5 +1,7 @@
 #include "tracee.h"
 
+#include <wsutil/wslog.h>
+
 wmem_map_t *wanted_fields = NULL;
 wmem_map_t *wanted_field_values = NULL;
 
