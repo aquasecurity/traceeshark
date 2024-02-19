@@ -1,6 +1,8 @@
 #include <stdbool.h>
+#include <glib.h>
 
 #include <wsutil/wsjson.h>
+#include <ws_version.h>
 
 jsmntok_t *json_get_next_object(jsmntok_t *cur);
 bool json_get_int(char *buf, jsmntok_t *parent, const char *name, gint64 *val);

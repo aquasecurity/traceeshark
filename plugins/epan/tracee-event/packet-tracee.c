@@ -226,11 +226,15 @@ static void free_dynamic_hf(gpointer key _U_, gpointer value, gpointer user_data
     proto_add_deregistered_data(hf_ptrs);
 }
 
+#if ((WIRESHARK_VERSION_MAJOR < 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR < 1)))
 static gboolean dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
+#else
+static bool dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_event_t event _U_, void *user_data _U_)
+#endif
 {
     wmem_map_foreach(event_dynamic_hf_map, free_dynamic_hf, NULL);
 
-    // return TRUE so this callback isn't unregistered
+    // return true so this callback isn't unregistered
     return TRUE;
 }
 
