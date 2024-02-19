@@ -9,7 +9,7 @@ if (Get-Command "wireshark" -ErrorAction SilentlyContinue) {
             exit 1
         }
     }
-} elseif (Get-Command "$env:Programfiles\Wireshark\Wiresharka.exe" -ErrorAction SilentlyContinue) {
+} elseif (Get-Command "$env:ProgramFiles\Wireshark\Wireshark.exe" -ErrorAction SilentlyContinue) {
     $wsPath = Join-Path -Path $env:ProgramFiles -ChildPath "Wireshark\Wireshark.exe"
     $wsVersionExists = (& $wsPath --version | Select-String -Pattern "Wireshark \d+\.\d+\.\d+" -AllMatches).Matches.Value -replace 'Wireshark '
 
