@@ -2,8 +2,6 @@
 
 ## Installation
 
-:warning: Currently Traceeshark is available on Linux for the latest Wireshark build only. Most distributions (including Ubuntu) do not have a package for the latest Wireshark version, so Wireshark must be built from source. See the [build instructions](https://www.wireshark.org/docs/wsdg_html_chunked/ChapterSetup.html#ChSetupUNIX).
-
 Traceeshark can be installed using an archive containing the plugins and other required files.
 
 Archives are available in the downloads section. Installations are per Wireshark version and may not work with other versions. Download the appropriate archive and unzip it.
