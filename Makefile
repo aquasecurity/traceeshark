@@ -83,11 +83,11 @@ install:
 	fi
 
 # build and run
-run: all
+run: all install
 	@wireshark/build/run/wireshark
 
 # build and run with debug logging
-debug: all
+debug: all install
 	@wireshark/build/run/wireshark --log-level DEBUG
 
 # prepare build directory (needed before building for the first time)
