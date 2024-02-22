@@ -153,7 +153,7 @@ static gboolean tracee_json_read_event(FILE_T fh, wtap_rec *rec, Buffer *buf, in
     // read lines from the log file until an event is found
     while (TRUE) {
         // read a line
-        ws_info("reading line at offset 0x%08" PRIx64, offset);
+        ws_noisy("reading line at offset 0x%08" PRIx64, offset);
         if ((data = file_gets_line(fh, 0)) == NULL)
             return FALSE;
         
@@ -164,7 +164,7 @@ static gboolean tracee_json_read_event(FILE_T fh, wtap_rec *rec, Buffer *buf, in
         offset = file_tell(fh);
     }
 
-    ws_info("found an event");
+    ws_noisy("found an event");
 
     // try retrieving timestamp from hash table
     if ((ts = g_hash_table_lookup(tracee_json->event_timestamps, &offset)) == NULL) {
