@@ -29,9 +29,12 @@ WS_DLL_PUBLIC uint32_t plugin_describe(void);
 #endif
 #endif
 
+#define START_SIGNATURE_ID 6000
+#define MAX_SIGNATURE_ID   6999
+
 static int proto_tracee = -1;
 
-static dissector_table_t event_name_dissector_table;
+//static dissector_table_t event_name_dissector_table;
 
 static int hf_timestamp = -1;
 static int hf_thread_start_time = -1;
@@ -634,6 +637,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_d
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
         arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin_port = %s", arg_str, tmp_str);
+        errno = 0;
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
 
@@ -675,6 +679,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, proto_tree *tree, gchar *json_d
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
         arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_port = %s", arg_str, tmp_str);
+        errno = 0;
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
 
@@ -897,6 +902,7 @@ static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree, gchar *
     // add type
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_type")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_type, tvb, 0, 0, tmp_str);
+    errno = 0;
     tmp_uint = strtoull(tmp_str, NULL, 10);
     DISSECTOR_ASSERT(errno == 0);
     tmp_item = proto_tree_add_uint(tree, hf_dns_qry_type, tvb, 0, 0, (guint32)tmp_uint);
@@ -906,6 +912,7 @@ static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree, gchar *
     // add class
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_class")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_class, tvb, 0, 0, tmp_str);
+    errno = 0;
     tmp_uint = strtoull(tmp_str, NULL, 10);
     DISSECTOR_ASSERT(errno == 0);
     tmp_item = proto_tree_add_uint(tree, hf_dns_qry_class, tvb, 0, 0, (guint32)tmp_uint);
@@ -1379,6 +1386,7 @@ static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *p
     // add id
     if (!json_get_int(json_data, triggered_by_tok, "id", &tmp_int)) {
         DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, triggered_by_tok, "id")) != NULL);
+        errno = 0;
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
     }
@@ -1608,7 +1616,7 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 {
     int num_toks;
     jsmntok_t *root_tok, *tmp_tok;
-    gint64 tmp_int;
+    gint64 event_id, tmp_int;
     nstime_t timestamp;
     gint32 pid, host_pid, tid, host_tid, ppid, host_ppid;
     gchar *event_name, *process_name, *syscall, *signature_name, *tmp_str,
@@ -1731,23 +1739,23 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     dissect_k8s_fields(tvb, tree, json_data, root_tok);
 
     // add event ID
-    if (!json_get_int(json_data, root_tok, "eventId", &tmp_int)) {
+    if (!json_get_int(json_data, root_tok, "eventId", &event_id)) {
         DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "eventId")) != NULL);
-        tmp_int = strtoll(tmp_str, NULL, 10);
+        errno = 0;
+        event_id = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
     }
-    proto_tree_add_int64(tree, hf_event_id, tvb, 0, 0, tmp_int);
+    proto_tree_add_int64(tree, hf_event_id, tvb, 0, 0, event_id);
+
+    // check if event is a signature
+    tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, event_id >= START_SIGNATURE_ID && event_id <= MAX_SIGNATURE_ID);
+    proto_item_set_generated(tmp_item);
 
     // add event name
     DISSECTOR_ASSERT((event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(event_name) > 0);
     proto_tree_add_string_wanted(tree, hf_event_name, tvb, 0, 0, event_name);
-    if (strlen(event_name) > 0) {
+    if (strlen(event_name) > 0)
         proto_item_append_text(item, ": %s", event_name);
-
-        // check if event is a signature
-        tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, strncmp(event_name, "sig_", 4) == 0);
-        proto_item_set_generated(tmp_item);
-    }
 
     // add matched policies
     add_string_array(tvb, tree, hf_matched_policies, "Matched Policies",
