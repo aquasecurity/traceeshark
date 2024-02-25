@@ -36,15 +36,72 @@ static int dissect_net_packet_http_request(tvbuff_t *tvb _U_, packet_info *pinfo
 {
     const gchar *method, *protocol, *uri_path, *content_type;
 
-    method = wanted_field_get_str("tracee.http_request.method");
-    protocol = wanted_field_get_str("tracee.http_request.protocol");
-    uri_path = wanted_field_get_str("tracee.http_request.uri_path");
+    method = wanted_field_get_str("tracee.proto_http_request.method");
+    protocol = wanted_field_get_str("tracee.proto_http_request.protocol");
+    uri_path = wanted_field_get_str("tracee.proto_http_request.uri_path");
+
+    if (!method || !protocol || !uri_path)
+        return 0;
     
-    if (method && protocol && uri_path)
-        col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s %s", method, uri_path, protocol);
+    col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s %s", method, uri_path, protocol);
     
     if (strcmp(method, "POST") && ((content_type = wanted_field_get_str("http.content_type")) != NULL))
         col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", content_type);
+
+    return 0;
+}
+
+static int dissect_net_packet_http(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    const gchar *direction, *method, *protocol, *uri_path, *content_type, *status;
+    gchar *tmp, *content_type_short = NULL;
+    gboolean request;
+
+    direction = wanted_field_get_str("tracee.proto_http.direction");
+    if (direction == NULL)
+        return 0;
+    if (strcmp(direction, "request") == 0)
+        request = TRUE;
+    else if (strcmp(direction, "response") == 0)
+        request = FALSE;
+    else
+        return 0;
+    
+    protocol = wanted_field_get_str("tracee.proto_http.protocol");
+    content_type = wanted_field_get_str("http.content_type");
+
+    // discard semicolon in content type
+    if (content_type != NULL) {
+        content_type_short = wmem_strdup(pinfo->pool, content_type);
+        tmp = strchr(content_type_short, ';');
+        if (tmp != NULL)
+            *tmp = '\0';
+    }
+
+    if (request) {
+        method = wanted_field_get_str("tracee.proto_http.method");
+        uri_path = wanted_field_get_str("tracee.proto_http.uri_path");
+
+        if (!method || !protocol || !uri_path)
+            return 0;
+        
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s %s", method, uri_path, protocol);
+        
+        if (content_type_short != NULL)
+            col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", content_type_short);
+    }
+
+    else {
+        status = wanted_field_get_str("tracee.proto_http.status");
+
+        if (!protocol || !status)
+            return 0;
+        
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s", protocol, status);
+
+        if (content_type_short != NULL)
+            col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", content_type_short);
+    }
 
     return 0;
 }
@@ -82,10 +139,17 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.args.argv_line");
 
     // needed for dissect_net_packet_http_request
-    register_wanted_field("tracee.http_request.method");
-    register_wanted_field("tracee.http_request.protocol");
-    register_wanted_field("tracee.http_request.uri_path");
+    register_wanted_field("tracee.proto_http_request.method");
+    register_wanted_field("tracee.proto_http_request.protocol");
+    register_wanted_field("tracee.proto_http_request.uri_path");
     register_wanted_field("http.content_type");
+
+    // needed for dissect_net_packet_http
+    register_wanted_field("tracee.proto_http.direction");
+    register_wanted_field("tracee.proto_http.method");
+    register_wanted_field("tracee.proto_http.protocol");
+    register_wanted_field("tracee.proto_http.uri_path");
+    register_wanted_field("tracee.proto_http.status");
 }
 
 void register_tracee_postdissectors(int proto)
@@ -98,6 +162,7 @@ void register_tracee_postdissectors(int proto)
     register_tracee_event_postdissector("sig_machine_fingerprint", dissect_sig_machine_fingerprint);
     register_tracee_event_postdissector("sched_process_exec", dissect_sched_process_exec);
     register_tracee_event_postdissector("net_packet_http_request", dissect_net_packet_http_request);
+    register_tracee_event_postdissector("net_packet_http", dissect_net_packet_http);
 
     register_wanted_fields();
 }

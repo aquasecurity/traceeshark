@@ -32,6 +32,13 @@ WS_DLL_PUBLIC uint32_t plugin_describe(void);
 #define START_SIGNATURE_ID 6000
 #define MAX_SIGNATURE_ID   6999
 
+const value_string packet_metadata_directions[] = {
+    { 0, "Invalid" },
+    { 1, "Ingress" },
+    { 2, "Egress"  },
+    { 0, NULL      }
+};
+
 static int proto_tracee = -1;
 
 //static dissector_table_t event_name_dissector_table;
@@ -122,6 +129,10 @@ static int hf_http_request = -1;
 static int hf_http_response = -1;
 static int hf_http_request_method = -1;
 static int hf_http_request_version = -1;
+static int hf_http_response_version = -1;
+static int hf_http_response_code = -1;
+static int hf_http_response_code_desc = -1;
+static int hf_http_response_phrase = -1;
 static int hf_http_host = -1;
 static int hf_http_request_uri = -1;
 static int hf_http_content_length = -1;
@@ -185,6 +196,20 @@ static int hf_proto_http_request_host = -1;
 static int hf_proto_http_request_uri_path = -1;
 static int hf_proto_http_request_header = -1;
 static int hf_proto_http_request_content_length = -1;
+
+// trace.PacketMetadata fields
+static int hf_packet_metadata_direction = -1;
+
+// trace.ProtoHTTP fields
+static int hf_proto_http_direction = -1;
+static int hf_proto_http_method = -1;
+static int hf_proto_http_protocol = -1;
+static int hf_proto_http_host = -1;
+static int hf_proto_http_uri_path = -1;
+static int hf_proto_http_status = -1;
+static int hf_proto_http_status_code = -1;
+static int hf_proto_http_header = -1;
+static int hf_proto_http_content_length = -1;
 
 static gint ett_tracee = -1;
 static gint ett_container = -1;
@@ -992,7 +1017,7 @@ static gchar *dissect_http_headers(tvbuff_t *tvb, proto_tree *tree, gchar *json_
                 ws_info("unknown HTTP header \"%s\"", header_name);
             
             if (header_hf != -1) {
-                tmp_item = proto_tree_add_string(headers_tree, header_hf, tvb, 0, 0, header_value);
+                tmp_item = proto_tree_add_string_wanted(headers_tree, header_hf, tvb, 0, 0, header_value);
                 proto_item_set_hidden(tmp_item);
             }
 
@@ -1006,7 +1031,7 @@ static gchar *dissect_http_headers(tvbuff_t *tvb, proto_tree *tree, gchar *json_
     return headers_str;
 }
 
-static gchar *do_dissect_http_request(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static gchar *do_dissect_proto_http_request(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     proto_item *tmp_item;
     gchar *arg_str, *headers_str, *tmp_str;
@@ -1054,6 +1079,121 @@ static gchar *do_dissect_http_request(tvbuff_t *tvb, proto_tree *tree, gchar *js
     // add content length
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "content_length", &tmp_int));
     proto_tree_add_int64_wanted(tree, hf_proto_http_request_content_length, tvb, 0, 0, tmp_int);
+    tmp_item = proto_tree_add_uint64(tree, hf_http_content_length, tvb, 0, 0, (guint64)tmp_int);
+    proto_item_set_hidden(tmp_item);
+    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, content_length = %" PRId64, arg_str, tmp_int);
+
+    return arg_str;
+}
+
+static gchar *do_dissect_packet_metadata(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gint64 tmp_int;
+    const gchar *tmp_str;
+
+    // add direction
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "direction", &tmp_int));
+    proto_tree_add_int_wanted(tree, hf_packet_metadata_direction, tvb, 0, 0, (gint32)tmp_int);
+    tmp_str = try_val_to_str((guint32)tmp_int, packet_metadata_directions);
+    if (tmp_str != NULL)
+        return wmem_strdup_printf(wmem_packet_scope(), "direction = %s", tmp_str);
+    else
+        return wmem_strdup_printf(wmem_packet_scope(), "direction = %d", (gint32)tmp_int);
+}
+
+static gchar *do_dissect_proto_http(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gchar *arg_str, *status_desc, *headers_str, *tmp_str;
+    gboolean request;
+    proto_item *tmp_item;
+    gint64 tmp_int;
+    jsmntok_t *headers_tok;
+
+    add_network_filter(tvb, tree, "http");
+
+    // add direction
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "direction")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_direction, tvb, 0, 0, tmp_str);
+    arg_str = wmem_strdup_printf(wmem_packet_scope(), "direction = %s", tmp_str);
+    if (strcmp(tmp_str, "request") == 0)
+        request = TRUE;
+    else {
+        DISSECTOR_ASSERT(strcmp(tmp_str, "response") == 0);
+        request = FALSE;
+    }
+    tmp_item = proto_tree_add_boolean_wanted(tree, request ? hf_http_request : hf_http_response, tvb, 0, 0, TRUE);
+    proto_item_set_hidden(tmp_item);
+
+    // add method
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "method")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_method, tvb, 0, 0, tmp_str);
+    if (request) {
+        tmp_item = proto_tree_add_string(tree, hf_http_request_method, tvb, 0, 0, tmp_str);
+        proto_item_set_hidden(tmp_item);
+    }
+    if (strlen(tmp_str) > 0)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, method = %s", arg_str, tmp_str);
+
+    // add protocol
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "protocol")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_protocol, tvb, 0, 0, tmp_str);
+    tmp_item = proto_tree_add_string(tree, request ? hf_http_request_version : hf_http_response_version, tvb, 0, 0, tmp_str);
+    proto_item_set_hidden(tmp_item);
+    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, protocol = %s", arg_str, tmp_str);
+
+    // add host
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "host")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_host, tvb, 0, 0, tmp_str);
+    if (request) {
+        tmp_item = proto_tree_add_string(tree, hf_http_host, tvb, 0, 0, tmp_str);
+        proto_item_set_hidden(tmp_item);
+    }
+    if (strlen(tmp_str) > 0)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, host = %s", arg_str, tmp_str);
+
+    // add URI path
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "uri_path")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_uri_path, tvb, 0, 0, tmp_str);
+    if (request) {
+        tmp_item = proto_tree_add_string(tree, hf_http_request_uri, tvb, 0, 0, tmp_str);
+        proto_item_set_hidden(tmp_item);
+    }
+    if (strlen(tmp_str) > 0)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, URI = %s", arg_str, tmp_str);
+
+    // add status
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "status")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_proto_http_status, tvb, 0, 0, tmp_str);
+    if (!request) {
+        status_desc = strchr(tmp_str, ' ');
+        if (status_desc != NULL) {
+            status_desc += 1; // skip whitespace
+            tmp_item = proto_tree_add_string(tree, hf_http_response_code_desc, tvb, 0, 0, status_desc);
+            proto_item_set_hidden(tmp_item);
+            tmp_item = proto_tree_add_string(tree, hf_http_response_phrase, tvb, 0, 0, status_desc);
+            proto_item_set_hidden(tmp_item);
+        }
+    }
+    if (strlen(tmp_str) > 0)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, status = %s", arg_str, tmp_str);
+    
+    // add status code
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "status_code", &tmp_int));
+    proto_tree_add_int_wanted(tree, hf_proto_http_status_code, tvb, 0, 0, (gint32)tmp_int);
+    if (!request) {
+        tmp_item = proto_tree_add_uint(tree, hf_http_response_code, tvb, 0, 0, (guint32)tmp_int);
+        proto_item_set_hidden(tmp_item);
+    }
+    
+    // add headers
+    DISSECTOR_ASSERT((headers_tok = json_get_object(json_data, obj_tok, "headers")) != NULL);
+    headers_str = dissect_http_headers(tvb, tree, json_data, headers_tok);
+    if (headers_str != NULL)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, headers = [%s]", arg_str, headers_str);
+    
+    // add content length
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "content_length", &tmp_int));
+    proto_tree_add_int64_wanted(tree, hf_proto_http_content_length, tvb, 0, 0, tmp_int);
     tmp_item = proto_tree_add_uint64(tree, hf_http_content_length, tvb, 0, 0, (guint64)tmp_int);
     proto_item_set_hidden(tmp_item);
     arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, content_length = %" PRId64, arg_str, tmp_int);
@@ -1360,10 +1500,22 @@ static gchar *dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree,
     return dissect_object_array_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_dns_query_data);
 }
 
-static gchar *dissect_http_request(tvbuff_t *tvb, proto_tree *tree,
+static gchar *dissect_proto_http_request(tvbuff_t *tvb, proto_tree *tree,
     hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
-    return dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_http_request);
+    return dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_proto_http_request);
+}
+
+static gchar *dissect_packet_metadata(tvbuff_t *tvb, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_packet_metadata);
+}
+
+static gchar *dissect_proto_http(tvbuff_t *tvb, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_proto_http);
 }
 
 static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo,
@@ -1841,13 +1993,14 @@ static void init_complex_types(void) {
     add_supported_type("slim_cred_t", dissect_slim_cred_t);
     add_supported_type("trace.PktMeta", dissect_pktmeta);
     add_supported_type("[]trace.DnsQueryData", dissect_dns_query_data);
-    add_supported_type("trace.ProtoHTTPRequest", dissect_http_request);
+    add_supported_type("trace.ProtoHTTPRequest", dissect_proto_http_request);
+    add_supported_type("trace.PacketMetadata", dissect_packet_metadata);
+    add_supported_type("trace.ProtoHTTP", dissect_proto_http);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
     add_unsupported_type("map[string]trace.HookedSymbolData");
     add_unsupported_type("[]trace.DnsResponseData");
     add_unsupported_type("trace.ProtoTCP");
-    add_unsupported_type("trace.ProtoHTTP");
     add_unsupported_type("trace.ProtoUDP");
     add_unsupported_type("[]trace.HookedSymbolData");
     add_unsupported_type("struct file_operations *");
@@ -1895,6 +2048,8 @@ static void init_complex_types(void) {
     add_unsupported_type("struct siginfo*");
     add_unsupported_type("gid_t*");
     add_unsupported_type("struct clone_args*");
+    add_unsupported_type("trace.ProtoIPv4");
+    add_unsupported_type("trace.ProtoHTTPResponse");
 }
 
 void proto_register_tracee(void)
@@ -2324,6 +2479,26 @@ void proto_register_tracee(void)
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
+        { &hf_http_response_version,
+          { "http.response.version", "http.response.version",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_http_response_code,
+          { "http.response.code", "http.response.code",
+            FT_UINT24, BASE_DEC, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_http_response_code_desc,
+          { "http.response.code.desc", "http.response.code.desc",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_http_response_phrase,
+          { "http.response.phrase", "http.response.phrase",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
         { &hf_http_host,
           { "http.host", "http.host",
             FT_STRINGZ, BASE_NONE, NULL, 0,
@@ -2573,34 +2748,90 @@ void proto_register_tracee(void)
         }
     };
 
-    static hf_register_info http_request_hf[] = {
+    static hf_register_info proto_http_request_hf[] = {
         { &hf_proto_http_request_method,
-          { "Method", "tracee.http_request.method",
+          { "Method", "tracee.proto_http_request.method",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "HTTP method", HFILL }
         },
         { &hf_proto_http_request_protocol,
-          { "Protocol", "tracee.http_request.protocol",
+          { "Protocol", "tracee.proto_http_request.protocol",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "HTTP protocol version", HFILL }
         },
         { &hf_proto_http_request_host,
-          { "Host", "tracee.http_request.host",
+          { "Host", "tracee.proto_http_request.host",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "HTTP host", HFILL }
         },
         { &hf_proto_http_request_uri_path,
-          { "URI Path", "tracee.http_request.uri_path",
+          { "URI Path", "tracee.proto_http_request.uri_path",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "HTTP URI path", HFILL }
         },
         { &hf_proto_http_request_header,
-          { "Header", "tracee.http_request.header",
+          { "Header", "tracee.proto_http_request.header",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "HTTP header", HFILL }
         },
         { &hf_proto_http_request_content_length,
-          { "Content Length", "tracee.http_request.content_length",
+          { "Content Length", "tracee.proto_http_request.content_length",
+            FT_INT64, BASE_DEC, NULL, 0,
+            "HTTP content length", HFILL }
+        }
+    };
+
+    static hf_register_info packet_metadata_hf[] = {
+        { &hf_packet_metadata_direction,
+          { "Direction", "tracee.packet_metadata.direction",
+            FT_INT32, BASE_DEC, VALS(packet_metadata_directions), 0,
+            "Packet direction", HFILL }
+        }
+    };
+
+    static hf_register_info proto_http_hf[] = {
+        { &hf_proto_http_direction,
+          { "Direction", "tracee.proto_http.direction",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP direction", HFILL }
+        },
+        { &hf_proto_http_method,
+          { "Method", "tracee.proto_http.method",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP method", HFILL }
+        },
+        { &hf_proto_http_protocol,
+          { "Protocol", "tracee.proto_http.protocol",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP protocol version", HFILL }
+        },
+        { &hf_proto_http_host,
+          { "Host", "tracee.proto_http.host",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP host", HFILL }
+        },
+        { &hf_proto_http_uri_path,
+          { "URI Path", "tracee.proto_http.uri_path",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP URI path", HFILL }
+        },
+        { &hf_proto_http_status,
+          { "Status", "tracee.proto_http.status",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP status", HFILL }
+        },
+        { &hf_proto_http_status_code,
+          { "Status Code", "tracee.proto_http.status_code",
+            FT_INT32, BASE_DEC, NULL, 0,
+            "HTTP status code", HFILL }
+        },
+        { &hf_proto_http_header,
+          { "Header", "tracee.proto_http.header",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "HTTP header", HFILL }
+        },
+        { &hf_proto_http_content_length,
+          { "Content Length", "tracee.proto_http.content_length",
             FT_INT64, BASE_DEC, NULL, 0,
             "HTTP content length", HFILL }
         }
@@ -2613,7 +2844,9 @@ void proto_register_tracee(void)
     proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
     proto_register_field_array(proto_tracee, pktmeta_hf, array_length(pktmeta_hf));
     proto_register_field_array(proto_tracee, dns_query_data_hf, array_length(dns_query_data_hf));
-    proto_register_field_array(proto_tracee, http_request_hf, array_length(http_request_hf));
+    proto_register_field_array(proto_tracee, proto_http_request_hf, array_length(proto_http_request_hf));
+    proto_register_field_array(proto_tracee, packet_metadata_hf, array_length(packet_metadata_hf));
+    proto_register_field_array(proto_tracee, proto_http_hf, array_length(proto_http_hf));
     proto_register_subtree_array(ett, array_length(ett));
 
     // initialize mapping of supported complex types and their dissection functions
