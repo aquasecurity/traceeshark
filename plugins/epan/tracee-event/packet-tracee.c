@@ -211,6 +211,13 @@ static int hf_proto_http_status_code = -1;
 static int hf_proto_http_header = -1;
 static int hf_proto_http_content_length = -1;
 
+// trace.HookedSymbolData fields
+static int hf_hooked_symbol_name = -1;
+static int hf_hooked_symbol_module_owner = -1;
+
+// map[string]trace.HookedSymbolData fields
+static int hf_hooked_symbol_entry = -1;
+
 static gint ett_tracee = -1;
 static gint ett_container = -1;
 static gint ett_k8s = -1;
@@ -224,6 +231,7 @@ static gint ett_triggered_by = -1;
 static gint ett_arg_obj = -1;
 static gint ett_arg_obj_arr = -1;
 static gint ett_http_headers = -1;
+static gint ett_hooked_symbols_map = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -1201,6 +1209,23 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, proto_tree *tree, gchar *json
     return arg_str;
 }
 
+static gchar *do_dissect_hooked_symbol_data(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gchar *tmp_str, *arg_str;
+
+    // add symbol name
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "SymbolName")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_hooked_symbol_name, tvb, 0, 0, tmp_str);
+    arg_str = wmem_strdup_printf(wmem_packet_scope(), "SymbolName = %s", tmp_str);
+
+    // add module owner
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "ModuleOwner")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_hooked_symbol_module_owner, tvb, 0, 0, tmp_str);
+    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, ModuleOwner = %s", arg_str, tmp_str);
+
+    return arg_str;
+}
+
 static gchar *dissect_object_arg(tvbuff_t *tvb, proto_tree *tree, gchar *json_data,
     jsmntok_t *arg_tok, const gchar *arg_name, object_dissector_t dissector)
 {
@@ -1443,7 +1468,7 @@ static gchar *dissect_unknown_arg(tvbuff_t *tvb, proto_tree *tree,
     else {
         ws_info("cannot dissect arg \"%s\" of type \"unknown\"", hf->hfinfo.name);
         tmp_item = proto_tree_add_item(tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
-        proto_item_append_text(tmp_item, " (unsupported argument type)");
+        proto_item_append_text(tmp_item, " (unsupported type \"unknown\")");
     }
     
     return arg_str;
@@ -1516,6 +1541,65 @@ static gchar *dissect_proto_http(tvbuff_t *tvb, proto_tree *tree,
     hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
     return dissect_object_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_proto_http);
+}
+
+static gchar *dissect_hooked_symbol_data_map(tvbuff_t *tvb, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    proto_item *symbols_item, *entry_item;
+    proto_tree *symbols_tree, *entry_tree;
+    jsmntok_t *obj_tok, *curr_entry_tok, *curr_symbol_data_tok;
+    int i;
+    gchar *entry_name, *symbol_data_str, *arg_str = NULL;
+
+    // add hooked symbols tree
+    symbols_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(symbols_item, "%s", hf->hfinfo.name);
+    symbols_tree = proto_item_add_subtree(symbols_item, ett_hooked_symbols_map);
+
+    // iterate through objects under the main argument object
+    DISSECTOR_ASSERT((obj_tok = json_get_object(json_data, arg_tok, "value")) != NULL);
+    curr_entry_tok = obj_tok + 1;
+    for (i = 0; i < obj_tok->size; i++, curr_entry_tok = json_get_next_object(curr_entry_tok)) {
+        // get entry name
+        json_data[curr_entry_tok->end] = '\0';
+        entry_name = &json_data[curr_entry_tok->start];
+        DISSECTOR_ASSERT(json_decode_string_inplace(entry_name));
+
+        // get entry object
+        curr_symbol_data_tok = curr_entry_tok + 1;
+        DISSECTOR_ASSERT(curr_symbol_data_tok->type == JSMN_OBJECT);
+
+        // create entry tree
+        entry_item = proto_tree_add_item(symbols_tree, hf_hooked_symbol_entry, tvb, 0, 0, ENC_NA);
+        proto_item_set_text(entry_item, "%s", entry_name);
+        entry_tree = proto_item_add_subtree(entry_item, ett_hooked_symbols_map);
+
+        // dissect entry
+        symbol_data_str = do_dissect_hooked_symbol_data(tvb, entry_tree, json_data, curr_symbol_data_tok);
+
+        // add entry str to argument str
+        if (symbol_data_str != NULL) {
+            if (arg_str != NULL)
+                arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, %s: {%s}", arg_str, entry_name, symbol_data_str);
+            else
+                arg_str = wmem_strdup_printf(wmem_packet_scope(), "{%s: {%s}", entry_name, symbol_data_str);
+        }
+    }
+
+    // finalize argument str
+    if (arg_str != NULL)
+        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s}", arg_str);
+
+    proto_item_append_text(symbols_item, ": %d item%s", i, i == 1 ? "" : "s");
+
+    return arg_str;
+}
+
+static gchar *dissect_hooked_symbol_data_arr(tvbuff_t *tvb, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_object_array_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_hooked_symbol_data);
 }
 
 static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo,
@@ -1774,6 +1858,7 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     gchar *event_name, *process_name, *syscall, *signature_name, *tmp_str,
         *pid_col_str = NULL, *tid_col_str = NULL, *ppid_col_str = NULL;
     proto_item *tmp_item;
+    gboolean is_signature;
 
     num_toks = json_parse(json_data, NULL, 0);
     DISSECTOR_ASSERT_HINT(num_toks > 0, "JSON decode error: non-positive num_toks");
@@ -1899,15 +1984,20 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     }
     proto_tree_add_int64(tree, hf_event_id, tvb, 0, 0, event_id);
 
-    // check if event is a signature
-    tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, event_id >= START_SIGNATURE_ID && event_id <= MAX_SIGNATURE_ID);
-    proto_item_set_generated(tmp_item);
-
     // add event name
     DISSECTOR_ASSERT((event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(event_name) > 0);
     proto_tree_add_string_wanted(tree, hf_event_name, tvb, 0, 0, event_name);
     if (strlen(event_name) > 0)
         proto_item_append_text(item, ": %s", event_name);
+    
+    // check if event is a signature
+    is_signature = FALSE;
+    if (event_id >= START_SIGNATURE_ID && event_id <= MAX_SIGNATURE_ID)
+        is_signature = TRUE;
+    else if (strncmp(event_name, "sig_", 4) == 0)
+        is_signature = TRUE;
+    tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, is_signature);
+    proto_item_set_generated(tmp_item);
 
     // add matched policies
     add_string_array(tvb, tree, hf_matched_policies, "Matched Policies",
@@ -1996,13 +2086,13 @@ static void init_complex_types(void) {
     add_supported_type("trace.ProtoHTTPRequest", dissect_proto_http_request);
     add_supported_type("trace.PacketMetadata", dissect_packet_metadata);
     add_supported_type("trace.ProtoHTTP", dissect_proto_http);
+    add_supported_type("map[string]trace.HookedSymbolData", dissect_hooked_symbol_data_map);
+    add_supported_type("[]trace.HookedSymbolData", dissect_hooked_symbol_data_arr);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
-    add_unsupported_type("map[string]trace.HookedSymbolData");
     add_unsupported_type("[]trace.DnsResponseData");
     add_unsupported_type("trace.ProtoTCP");
     add_unsupported_type("trace.ProtoUDP");
-    add_unsupported_type("[]trace.HookedSymbolData");
     add_unsupported_type("struct file_operations *");
     add_unsupported_type("const struct iovec*");
     add_unsupported_type("trace.ProtoDNS");
@@ -2067,7 +2157,8 @@ void proto_register_tracee(void)
         &ett_triggered_by,
         &ett_arg_obj,
         &ett_arg_obj_arr,
-        &ett_http_headers
+        &ett_http_headers,
+        &ett_hooked_symbols_map
     };
 
     static hf_register_info hf[] = {
@@ -2837,6 +2928,24 @@ void proto_register_tracee(void)
         }
     };
 
+    static hf_register_info hooked_symbols_hf[] = {
+        { &hf_hooked_symbol_entry,
+          { "Entry", "tracee.hooked_symbols.entry",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Hooked symbol entry", HFILL }
+        },
+        { &hf_hooked_symbol_name,
+          { "Name", "tracee.hooked_symbols.name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Hooked symbol name", HFILL }
+        },
+        { &hf_hooked_symbol_module_owner,
+          { "Module Owner", "tracee.hooked_symbols.module_owner",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Hooked symbol module owner", HFILL }
+        }
+    };
+
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
     proto_register_field_array(proto_tracee, network_hf, array_length(network_hf));
@@ -2847,6 +2956,7 @@ void proto_register_tracee(void)
     proto_register_field_array(proto_tracee, proto_http_request_hf, array_length(proto_http_request_hf));
     proto_register_field_array(proto_tracee, packet_metadata_hf, array_length(packet_metadata_hf));
     proto_register_field_array(proto_tracee, proto_http_hf, array_length(proto_http_hf));
+    proto_register_field_array(proto_tracee, hooked_symbols_hf, array_length(hooked_symbols_hf));
     proto_register_subtree_array(ett, array_length(ett));
 
     // initialize mapping of supported complex types and their dissection functions
