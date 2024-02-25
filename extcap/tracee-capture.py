@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
 import fcntl
-import json
 import os
 import shutil
 import signal
@@ -20,16 +19,15 @@ TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
 TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
 F_SETPIPE_SZ = 1031 # python < 3.10 does not have fcntl.F_SETPIPE_SZ
 READER_COMM = 'tracee-capture'
-TRACEE_LOGS_PATH = '/tmp/tracee_logs.log'
 
 GENERAL_GROUP = 'General'
-CONTAINER_OPTIONS_GROUP = 'Container options'
 TRACEE_OPTIONS_GROUP = 'Tracee options'
 PRESET_GROUP = 'Preset control'
 
 DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
 DEFAULT_CONTAINER_NAME = 'tracee'
+DEFAULT_LOGFILE = '/tmp/tracee_logs.log'
 
 container_id = None
 running = True
@@ -105,46 +103,50 @@ def show_config(reload_option: Optional[str]):
     presets = get_presets()
 
     args: List[ConfigArg] = [
-        ConfigArg(number=0, call='--image', display='Docker image', type='string',
+        ConfigArg(number=0, call='--logfile', display='Tracee logs file', type='fileselect',
+            default=DEFAULT_LOGFILE,
+            group=GENERAL_GROUP
+        ),
+        ConfigArg(number=1, call='--image', display='Docker image', type='string',
             tooltip='Tracee docker image',
             required='true',
             default=DEFAULT_TRACEE_IMAGE,
-            group=CONTAINER_OPTIONS_GROUP
+            group=GENERAL_GROUP
         ),
-        ConfigArg(number=1, call='--name', display='Container name', type='string',
+        ConfigArg(number=2, call='--name', display='Container name', type='string',
             default=DEFAULT_CONTAINER_NAME,
-            group=CONTAINER_OPTIONS_GROUP
+            group=GENERAL_GROUP
         ),
-        ConfigArg(number=2, call='--docker-options', display='Docker options', type='string',
+        ConfigArg(number=3, call='--docker-options', display='Docker options', type='string',
             tooltip='Command line options for docker',
             default=DEFAULT_DOCKER_OPTIONS,
-            group=CONTAINER_OPTIONS_GROUP
+            group=GENERAL_GROUP
         ),
-        """ConfigArg(number=3, call='--override-tracee-options', display='Override options', type='boolean',
+        """ConfigArg(number=4, call='--override-tracee-options', display='Override options', type='boolean',
             tooltip='Use custom tracee options',
             default='true' if settings.get('override_tracee_options') else 'false',
             group=TRACEE_OPTIONS_GROUP
         )""",
-        ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
+        ConfigArg(number=5, call='--custom-tracee-options', display='Custom tracee options', type='string',
             tooltip='Command line options for tracee',
             group=TRACEE_OPTIONS_GROUP
         ),
-        ConfigArg(number=5, call='--preset', display='Preset', type='selector',
+        ConfigArg(number=6, call='--preset', display='Preset', type='selector',
             tooltip='Tracee options preset',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Reload presets'
         ),
-        ConfigArg(number=6, call='--preset-file', display='Preset file', type='fileselect',
+        ConfigArg(number=7, call='--preset-file', display='Preset file', type='fileselect',
             group=PRESET_GROUP
         ),
-        ConfigArg(number=7, call='--preset-from-file', display='Update preset from file', type='selector',
+        ConfigArg(number=8, call='--preset-from-file', display='Update preset from file', type='selector',
             tooltip='Update existing preset or create new preset from the above selected file',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Update'
         ),
-        ConfigArg(number=8, call='--delete-preset', display='Delete preset', type='selector',
+        ConfigArg(number=9, call='--delete-preset', display='Delete preset', type='selector',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Delete'    
@@ -154,19 +156,19 @@ def show_config(reload_option: Optional[str]):
     values: List[ConfigVal] = []
 
     if reload_option is None or reload_option == 'preset':
-        values.append(ConfigVal(arg=5, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
+        values.append(ConfigVal(arg=6, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=5, value=preset, display=preset, default='false'))
+            values.append(ConfigVal(arg=6, value=preset, display=preset, default='false'))
     
     if reload_option is None or reload_option == 'preset-from-file':
-        values.append(ConfigVal(arg=7, value='new', display='New preset (uses file name)', default='true'))
+        values.append(ConfigVal(arg=8, value='new', display='New preset (uses file name)', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=7, value=preset, display=preset, default='false'))
+            values.append(ConfigVal(arg=8, value=preset, display=preset, default='false'))
     
     if reload_option is None or reload_option == 'delete-preset':
-        values.append(ConfigVal(arg=8, value='none', display='', default='true'))
+        values.append(ConfigVal(arg=9, value='none', display='', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=8, value=preset, display=preset))
+            values.append(ConfigVal(arg=9, value=preset, display=preset))
 
     if reload_option is None:
         for arg in args:
@@ -273,7 +275,6 @@ def stop_capture(signum, frame):
     _, err = proc.communicate()
 
     os.remove(TRACEE_OUTPUT_PIPE)
-    os.remove(TRACEE_LOGS_PATH)
 
     if proc.returncode != 0:
         sys.stderr.write(f'docker kill returned with error code {proc.returncode}, stderr dump:\n{err}')
@@ -302,14 +303,9 @@ def tracee_capture(args: argparse.Namespace):
     os.mkfifo(TRACEE_OUTPUT_PIPE)
 
     # create file to get logs from tracee
-    if os.path.isdir(TRACEE_LOGS_PATH):
-        os.rmdir(TRACEE_LOGS_PATH)
-    else:
-        try:
-            os.remove(TRACEE_LOGS_PATH)
-        except FileNotFoundError:
-            pass
-    open(TRACEE_LOGS_PATH, 'w').close()
+    if os.path.isdir(args.logfile):
+        os.rmdir(args.logfile)
+    open(args.logfile, 'w').close()
 
     reader_th = Thread(target=read_output, args=(TRACEE_OUTPUT_PIPE, args.fifo), daemon=True)
     reader_th.start()
@@ -319,7 +315,7 @@ def tracee_capture(args: argparse.Namespace):
     if len(args.name) > 0:
         command += f' --name {args.name}'
     
-    command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_PATH}:/logs.log:rw {args.image} {tracee_options}'
+    command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {args.logfile}:/logs.log:rw {args.image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if "comm=" not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
@@ -395,6 +391,7 @@ def main():
     parser.add_argument("--extcap-reload-option", help="Reload elements for the given option")
 
     # custom arguments
+    parser.add_argument('--logfile', type=str, default=DEFAULT_LOGFILE)
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
