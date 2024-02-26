@@ -17,16 +17,16 @@ static int dissect_sig_machine_fingerprint(tvbuff_t *tvb _U_, packet_info *pinfo
 
 static int dissect_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    const gchar *pathname, *argv_line;
+    const gchar *pathname, *cmdline;
 
     pathname = wanted_field_get_str("tracee.args.pathname");
-    argv_line = wanted_field_get_str("tracee.args.argv_line");
+    cmdline = wanted_field_get_str("tracee.args.command_line");
 
-    if (pathname && argv_line) {
-        if (strncmp(pathname, argv_line, strlen(pathname)) == 0)
-            col_add_str(pinfo->cinfo, COL_INFO, argv_line);
+    if (pathname && cmdline) {
+        if (strncmp(pathname, cmdline, strlen(pathname)) == 0)
+            col_add_str(pinfo->cinfo, COL_INFO, cmdline);
         else
-            col_add_fstr(pinfo->cinfo, COL_INFO, "%s: %s", pathname, argv_line);
+            col_add_fstr(pinfo->cinfo, COL_INFO, "%s: %s", pathname, cmdline);
     }
 
     return 0;
@@ -136,7 +136,7 @@ static void register_wanted_fields(void)
 
     // needed for dissect_sched_process_exec
     register_wanted_field("tracee.args.pathname");
-    register_wanted_field("tracee.args.argv_line");
+    register_wanted_field("tracee.args.command_line");
 
     // needed for dissect_net_packet_http_request
     register_wanted_field("tracee.proto_http_request.method");
