@@ -84,9 +84,36 @@ def get_effective_tracee_options(args: argparse.Namespace) -> str:
     if args.preset is not None and args.preset != 'none':
         return load_preset(args.preset)
     
-    
+    # add custom options
     options = args.custom_tracee_options or ''
 
+    # add container scope
+    container_scope = None
+    if args.container_scope == 'container':
+        container_scope = 'container'
+    elif args.container_scope == 'not-container':
+        container_scope = 'not-container'
+    elif args.container_scope == 'new-container':
+        container_scope = 'container=new'
+    
+    if container_scope is not None:
+        options += f' --scope {container_scope}'
+    
+    # add comm
+    if args.comm is not None and len(args.comm) > 0:
+        options += f' --scope comm="{args.comm}"'
+    
+    # add executable
+    if args.exec is not None and len(args.exec) > 0:
+        options += f' --scope executable="{args.exec}"'
+    
+    # add process scope
+    if args.process_scope == 'new':
+        options += ' --scope pid=new'
+    elif args.process_scope == 'follow':
+        options += ' --scope follow'
+
+    # add event sets
     if args.event_sets is not None:
         options += f' --events {args.event_sets}'
     
@@ -131,26 +158,42 @@ def show_config(reload_option: Optional[str]):
             tooltip='Command line options for tracee',
             group=TRACEE_OPTIONS_GROUP
         ),
-        ConfigArg(number=5, call='--event-sets', display='Event sets', type='multicheck',
-            tooltip='Sets of events to capture',
+        ConfigArg(number=5, call='--container-scope', display='Container scope', type='radio',
+            tooltip='Trace events from the selected scope of containers',
             group=TRACEE_OPTIONS_GROUP
         ),
-        ConfigArg(number=6, call='--preset', display='Preset', type='selector',
+        ConfigArg(number=6, call='--comm', display='Process name', type='string',
+            tooltip='Trace events from a specific process name',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=7, call='--exec', display='Executable file', type='string',
+            tooltip='Trace events from a specific executable file',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=8, call='--process-scope', display='Process scope', type='radio',
+            tooltip='Trace events from the selected scope of processes',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=9, call='--event-sets', display='Event sets', type='multicheck',
+            tooltip='Sets of events to trace',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=10, call='--preset', display='Preset', type='selector',
             tooltip='Tracee options preset',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Reload presets'
         ),
-        ConfigArg(number=7, call='--preset-file', display='Preset file', type='fileselect',
+        ConfigArg(number=11, call='--preset-file', display='Preset file', type='fileselect',
             group=PRESET_GROUP
         ),
-        ConfigArg(number=8, call='--preset-from-file', display='Update preset from file', type='selector',
+        ConfigArg(number=12, call='--preset-from-file', display='Update preset from file', type='selector',
             tooltip='Update existing preset or create new preset from the above selected file',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Update'
         ),
-        ConfigArg(number=9, call='--delete-preset', display='Delete preset', type='selector',
+        ConfigArg(number=13, call='--delete-preset', display='Delete preset', type='selector',
             group=PRESET_GROUP,
             reload='true',
             placeholder='Delete'    
@@ -158,67 +201,74 @@ def show_config(reload_option: Optional[str]):
     ]
 
     values: List[ConfigVal] = [
-        ConfigVal(arg=5, value='default', display='default', enabled='true'),
-        ConfigVal(arg=5, value='signatures', display='signatures', enabled='true'),
-        ConfigVal(arg=5, value='syscalls', display='syscalls', enabled='true'),
-        ConfigVal(arg=5, value='network_events', display='network_events', enabled='true'),
-        ConfigVal(arg=5, value='32bit_unique', display='32bit_unique', enabled='true', parent='syscalls'),
-        ConfigVal(arg=5, value='lsm_hooks', display='lsm_hooks', enabled='true'),
-        ConfigVal(arg=5, value='fs', display='fs', enabled='true'),
-        ConfigVal(arg=5, value='fs_read_write', display='fs_read_write', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_file_ops', display='fs_file_ops', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_dir_ops', display='fs_dir_ops', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_link_ops', display='fs_link_ops', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_fd_ops', display='fs_fd_ops', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_file_attr', display='fs_file_attr', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_mux_io', display='fs_mux_io', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_async_io', display='fs_async_io', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_sync', display='fs_sync', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_info', display='fs_info', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='fs_monitor', display='fs_monitor', enabled='true', parent='fs'),
-        ConfigVal(arg=5, value='proc', display='proc', enabled='true'),
-        ConfigVal(arg=5, value='proc_mem', display='proc_mem', enabled='true', parent='proc'),
-        ConfigVal(arg=5, value='proc_sched', display='proc_sched', enabled='true', parent='proc'),
-        ConfigVal(arg=5, value='proc_ids', display='proc_ids', enabled='true', parent='proc'),
-        ConfigVal(arg=5, value='proc_life', display='proc_life', enabled='true', parent='proc'),
-        ConfigVal(arg=5, value='signals', display='signals', enabled='true'),
-        ConfigVal(arg=5, value='ipc', display='ipc', enabled='true'),
-        ConfigVal(arg=5, value='ipc_pipe', display='ipc_pipe', enabled='true', parent='ipc'),
-        ConfigVal(arg=5, value='ipc_shm', display='ipc_shm', enabled='true', parent='ipc'),
-        ConfigVal(arg=5, value='ipc_sem', display='ipc_sem', enabled='true', parent='ipc'),
-        ConfigVal(arg=5, value='ipc_msgq', display='ipc_msgq', enabled='true', parent='ipc'),
-        ConfigVal(arg=5, value='ipc_futex', display='ipc_futex', enabled='true', parent='ipc'),
-        ConfigVal(arg=5, value='time', display='time', enabled='true'),
-        ConfigVal(arg=5, value='time_timer', display='time_timer', enabled='true', parent='time'),
-        ConfigVal(arg=5, value='time_tod', display='time_tod', enabled='true', parent='time'),
-        ConfigVal(arg=5, value='time_clock', display='time_clock', enabled='true', parent='time'),
-        ConfigVal(arg=5, value='net', display='net', enabled='true'),
-        ConfigVal(arg=5, value='net_sock', display='net_sock', enabled='true', parent='net'),
-        ConfigVal(arg=5, value='net_snd_rcv', display='net_snd_rcv', enabled='true', parent='net'),
-        ConfigVal(arg=5, value='flows', display='flows', enabled='true', parent='net'),
-        ConfigVal(arg=5, value='system', display='system', enabled='true'),
-        ConfigVal(arg=5, value='system_module', display='system_module', enabled='true', parent='system'),
-        ConfigVal(arg=5, value='system_numa', display='system_numa', enabled='true', parent='system'),
-        ConfigVal(arg=5, value='system_keys', display='system_keys', enabled='true', parent='system'),
-        ConfigVal(arg=5, value='container', display='container', enabled='true'),
-        ConfigVal(arg=5, value='derived', display='derived', enabled='true'),
-        ConfigVal(arg=5, value='security_alert', display='security_alert', enabled='true')
+        ConfigVal(arg=5, value='all', display='All events', default='true'),
+        ConfigVal(arg=5, value='container', display='Events from containers', default='false'),
+        ConfigVal(arg=5, value='new-container', display='Events from new containers', default='false'),
+        ConfigVal(arg=5, value='not-container', display='Events from host', default='false'),
+        ConfigVal(arg=8, value='all', display='All processes', default='true'),
+        ConfigVal(arg=8, value='new', display='New processes'),
+        ConfigVal(arg=8, value='follow', display='Follow descendants (of specified process name or executable)'),
+        ConfigVal(arg=9, value='default', display='default', enabled='true'),
+        ConfigVal(arg=9, value='signatures', display='signatures', enabled='true'),
+        ConfigVal(arg=9, value='syscalls', display='syscalls', enabled='true'),
+        ConfigVal(arg=9, value='network_events', display='network_events', enabled='true'),
+        ConfigVal(arg=9, value='32bit_unique', display='32bit_unique', enabled='true', parent='syscalls'),
+        ConfigVal(arg=9, value='lsm_hooks', display='lsm_hooks', enabled='true'),
+        ConfigVal(arg=9, value='fs', display='fs', enabled='true'),
+        ConfigVal(arg=9, value='fs_read_write', display='fs_read_write', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_file_ops', display='fs_file_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_dir_ops', display='fs_dir_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_link_ops', display='fs_link_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_fd_ops', display='fs_fd_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_file_attr', display='fs_file_attr', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_mux_io', display='fs_mux_io', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_async_io', display='fs_async_io', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_sync', display='fs_sync', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_info', display='fs_info', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='fs_monitor', display='fs_monitor', enabled='true', parent='fs'),
+        ConfigVal(arg=9, value='proc', display='proc', enabled='true'),
+        ConfigVal(arg=9, value='proc_mem', display='proc_mem', enabled='true', parent='proc'),
+        ConfigVal(arg=9, value='proc_sched', display='proc_sched', enabled='true', parent='proc'),
+        ConfigVal(arg=9, value='proc_ids', display='proc_ids', enabled='true', parent='proc'),
+        ConfigVal(arg=9, value='proc_life', display='proc_life', enabled='true', parent='proc'),
+        ConfigVal(arg=9, value='signals', display='signals', enabled='true'),
+        ConfigVal(arg=9, value='ipc', display='ipc', enabled='true'),
+        ConfigVal(arg=9, value='ipc_pipe', display='ipc_pipe', enabled='true', parent='ipc'),
+        ConfigVal(arg=9, value='ipc_shm', display='ipc_shm', enabled='true', parent='ipc'),
+        ConfigVal(arg=9, value='ipc_sem', display='ipc_sem', enabled='true', parent='ipc'),
+        ConfigVal(arg=9, value='ipc_msgq', display='ipc_msgq', enabled='true', parent='ipc'),
+        ConfigVal(arg=9, value='ipc_futex', display='ipc_futex', enabled='true', parent='ipc'),
+        ConfigVal(arg=9, value='time', display='time', enabled='true'),
+        ConfigVal(arg=9, value='time_timer', display='time_timer', enabled='true', parent='time'),
+        ConfigVal(arg=9, value='time_tod', display='time_tod', enabled='true', parent='time'),
+        ConfigVal(arg=9, value='time_clock', display='time_clock', enabled='true', parent='time'),
+        ConfigVal(arg=9, value='net', display='net', enabled='true'),
+        ConfigVal(arg=9, value='net_sock', display='net_sock', enabled='true', parent='net'),
+        ConfigVal(arg=9, value='net_snd_rcv', display='net_snd_rcv', enabled='true', parent='net'),
+        ConfigVal(arg=9, value='flows', display='flows', enabled='true', parent='net'),
+        ConfigVal(arg=9, value='system', display='system', enabled='true'),
+        ConfigVal(arg=9, value='system_module', display='system_module', enabled='true', parent='system'),
+        ConfigVal(arg=9, value='system_numa', display='system_numa', enabled='true', parent='system'),
+        ConfigVal(arg=9, value='system_keys', display='system_keys', enabled='true', parent='system'),
+        ConfigVal(arg=9, value='container', display='container', enabled='true'),
+        ConfigVal(arg=9, value='derived', display='derived', enabled='true'),
+        ConfigVal(arg=9, value='security_alert', display='security_alert', enabled='true')
     ]
 
     if reload_option is None or reload_option == 'preset':
-        values.append(ConfigVal(arg=6, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
+        values.append(ConfigVal(arg=10, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=6, value=preset, display=preset, default='false'))
+            values.append(ConfigVal(arg=10, value=preset, display=preset, default='false'))
     
     if reload_option is None or reload_option == 'preset-from-file':
-        values.append(ConfigVal(arg=8, value='new', display='New preset (uses file name)', default='true'))
+        values.append(ConfigVal(arg=12, value='new', display='New preset (uses file name)', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=8, value=preset, display=preset, default='false'))
+            values.append(ConfigVal(arg=12, value=preset, display=preset, default='false'))
     
     if reload_option is None or reload_option == 'delete-preset':
-        values.append(ConfigVal(arg=9, value='none', display='', default='true'))
+        values.append(ConfigVal(arg=13, value='none', display='', default='true'))
         for preset in presets:
-            values.append(ConfigVal(arg=9, value=preset, display=preset))
+            values.append(ConfigVal(arg=13, value=preset, display=preset))
 
     if reload_option is None:
         for arg in args:
@@ -446,6 +496,10 @@ def main():
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
     parser.add_argument('--custom-tracee-options', type=str)
+    parser.add_argument('--container-scope', type=str)
+    parser.add_argument('--comm', type=str)
+    parser.add_argument('--exec', type=str)
+    parser.add_argument('--process-scope', type=str)
     parser.add_argument('--event-sets', type=str)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
