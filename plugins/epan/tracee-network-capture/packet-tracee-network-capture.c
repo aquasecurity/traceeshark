@@ -78,6 +78,10 @@ static int postdissect_tracee_network_capture(tvbuff_t *tvb, packet_info *pinfo,
     if (strcmp(epan_get_interface_name(pinfo->epan, pinfo->rec->rec_header.packet_header.interface_id), "tracee") != 0)
 #endif
         return 0;
+    
+    // make sure this is not a live event capture
+    if (pinfo->rec->rec_header.packet_header.pkt_encap == WTAP_ENCAP_USER0)
+        return 0;
 
     // create tracee network capture tree
     tracee_network_capture_item = proto_tree_add_item(tree, proto_tracee_network_capture, tvb, 0, -1, ENC_NA);
