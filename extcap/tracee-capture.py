@@ -83,9 +83,14 @@ def load_preset(preset: str) -> str:
 def get_effective_tracee_options(args: argparse.Namespace) -> str:
     if args.preset is not None and args.preset != 'none':
         return load_preset(args.preset)
-        
-    #if settings.get('override_tracee_options'):
-    return args.custom_tracee_options or ''
+    
+    
+    options = args.custom_tracee_options or ''
+
+    if args.event_sets is not None:
+        options += f' --events {args.event_sets}'
+    
+    return options
 
 
 def get_presets() -> List[str]:
@@ -122,13 +127,12 @@ def show_config(reload_option: Optional[str]):
             default=DEFAULT_DOCKER_OPTIONS,
             group=GENERAL_GROUP
         ),
-        """ConfigArg(number=4, call='--override-tracee-options', display='Override options', type='boolean',
-            tooltip='Use custom tracee options',
-            default='true' if settings.get('override_tracee_options') else 'false',
-            group=TRACEE_OPTIONS_GROUP
-        )""",
-        ConfigArg(number=5, call='--custom-tracee-options', display='Custom tracee options', type='string',
+        ConfigArg(number=4, call='--custom-tracee-options', display='Custom tracee options', type='string',
             tooltip='Command line options for tracee',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(number=5, call='--event-sets', display='Event sets', type='multicheck',
+            tooltip='Sets of events to capture',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(number=6, call='--preset', display='Preset', type='selector',
@@ -153,7 +157,53 @@ def show_config(reload_option: Optional[str]):
         )
     ]
 
-    values: List[ConfigVal] = []
+    values: List[ConfigVal] = [
+        ConfigVal(arg=5, value='default', display='default', enabled='true'),
+        ConfigVal(arg=5, value='signatures', display='signatures', enabled='true'),
+        ConfigVal(arg=5, value='syscalls', display='syscalls', enabled='true'),
+        ConfigVal(arg=5, value='network_events', display='network_events', enabled='true'),
+        ConfigVal(arg=5, value='32bit_unique', display='32bit_unique', enabled='true', parent='syscalls'),
+        ConfigVal(arg=5, value='lsm_hooks', display='lsm_hooks', enabled='true'),
+        ConfigVal(arg=5, value='fs', display='fs', enabled='true'),
+        ConfigVal(arg=5, value='fs_read_write', display='fs_read_write', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_file_ops', display='fs_file_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_dir_ops', display='fs_dir_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_link_ops', display='fs_link_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_fd_ops', display='fs_fd_ops', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_file_attr', display='fs_file_attr', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_mux_io', display='fs_mux_io', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_async_io', display='fs_async_io', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_sync', display='fs_sync', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_info', display='fs_info', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='fs_monitor', display='fs_monitor', enabled='true', parent='fs'),
+        ConfigVal(arg=5, value='proc', display='proc', enabled='true'),
+        ConfigVal(arg=5, value='proc_mem', display='proc_mem', enabled='true', parent='proc'),
+        ConfigVal(arg=5, value='proc_sched', display='proc_sched', enabled='true', parent='proc'),
+        ConfigVal(arg=5, value='proc_ids', display='proc_ids', enabled='true', parent='proc'),
+        ConfigVal(arg=5, value='proc_life', display='proc_life', enabled='true', parent='proc'),
+        ConfigVal(arg=5, value='signals', display='signals', enabled='true'),
+        ConfigVal(arg=5, value='ipc', display='ipc', enabled='true'),
+        ConfigVal(arg=5, value='ipc_pipe', display='ipc_pipe', enabled='true', parent='ipc'),
+        ConfigVal(arg=5, value='ipc_shm', display='ipc_shm', enabled='true', parent='ipc'),
+        ConfigVal(arg=5, value='ipc_sem', display='ipc_sem', enabled='true', parent='ipc'),
+        ConfigVal(arg=5, value='ipc_msgq', display='ipc_msgq', enabled='true', parent='ipc'),
+        ConfigVal(arg=5, value='ipc_futex', display='ipc_futex', enabled='true', parent='ipc'),
+        ConfigVal(arg=5, value='time', display='time', enabled='true'),
+        ConfigVal(arg=5, value='time_timer', display='time_timer', enabled='true', parent='time'),
+        ConfigVal(arg=5, value='time_tod', display='time_tod', enabled='true', parent='time'),
+        ConfigVal(arg=5, value='time_clock', display='time_clock', enabled='true', parent='time'),
+        ConfigVal(arg=5, value='net', display='net', enabled='true'),
+        ConfigVal(arg=5, value='net_sock', display='net_sock', enabled='true', parent='net'),
+        ConfigVal(arg=5, value='net_snd_rcv', display='net_snd_rcv', enabled='true', parent='net'),
+        ConfigVal(arg=5, value='flows', display='flows', enabled='true', parent='net'),
+        ConfigVal(arg=5, value='system', display='system', enabled='true'),
+        ConfigVal(arg=5, value='system_module', display='system_module', enabled='true', parent='system'),
+        ConfigVal(arg=5, value='system_numa', display='system_numa', enabled='true', parent='system'),
+        ConfigVal(arg=5, value='system_keys', display='system_keys', enabled='true', parent='system'),
+        ConfigVal(arg=5, value='container', display='container', enabled='true'),
+        ConfigVal(arg=5, value='derived', display='derived', enabled='true'),
+        ConfigVal(arg=5, value='security_alert', display='security_alert', enabled='true')
+    ]
 
     if reload_option is None or reload_option == 'preset':
         values.append(ConfigVal(arg=6, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
@@ -395,8 +445,8 @@ def main():
     parser.add_argument('--image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    #parser.add_argument('--override-tracee-options', type=str, default='true' if defaults.get('override_tracee_options') else 'false')
     parser.add_argument('--custom-tracee-options', type=str)
+    parser.add_argument('--event-sets', type=str)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
@@ -414,11 +464,6 @@ def main():
     
     if not args.extcap_interfaces and args.extcap_interface is None:
         parser.exit("An interface must be provided or the selection must be displayed")
-    
-    """if not args.override_tracee_options:
-        args.override_tracee_options = False
-    else:
-        args.override_tracee_options = True if args.override_tracee_options == 'true' else False"""
     
     if args.extcap_reload_option is not None:
         handle_reload(args.extcap_reload_option, args)
