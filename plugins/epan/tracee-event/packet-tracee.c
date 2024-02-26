@@ -123,8 +123,8 @@ static int hf_udp_port = -1;
 static int hf_udp_srcport = -1;
 static int hf_udp_dstport = -1;
 static int hf_dns_qry_name = -1;
-static int hf_dns_qry_type = -1;
-static int hf_dns_qry_class = -1;
+static int hf_dns_resp_ttl = -1;
+static int hf_dns_resp_name = -1;
 static int hf_http_request = -1;
 static int hf_http_response = -1;
 static int hf_http_request_method = -1;
@@ -189,6 +189,11 @@ static int hf_dnsquery_query = -1;
 static int hf_dnsquery_type = -1;
 static int hf_dnsquery_class = -1;
 
+// DnsAnswer fields
+static int hf_dnsanswer_type = -1;
+static int hf_dnsanswer_ttl = -1;
+static int hf_dnsanswer_answer = -1;
+
 // trace.ProtoHTTPRequest fields
 static int hf_proto_http_request_method = -1;
 static int hf_proto_http_request_protocol = -1;
@@ -232,6 +237,7 @@ static gint ett_arg_obj = -1;
 static gint ett_arg_obj_arr = -1;
 static gint ett_http_headers = -1;
 static gint ett_hooked_symbols_map = -1;
+static gint ett_dns_query_data = -1;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -921,7 +927,6 @@ static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree, gchar *
 {
     gchar *arg_str, *tmp_str;
     proto_item *tmp_item;
-    guint64 tmp_uint;
 
     add_network_filter(tvb, tree, "dns");
 
@@ -935,24 +940,75 @@ static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree, gchar *
     // add type
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_type")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_type, tvb, 0, 0, tmp_str);
-    errno = 0;
-    tmp_uint = strtoull(tmp_str, NULL, 10);
-    DISSECTOR_ASSERT(errno == 0);
-    tmp_item = proto_tree_add_uint(tree, hf_dns_qry_type, tvb, 0, 0, (guint32)tmp_uint);
-    proto_item_set_hidden(tmp_item);
     arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, type = %s", arg_str, tmp_str);
 
     // add class
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_class")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_class, tvb, 0, 0, tmp_str);
-    errno = 0;
-    tmp_uint = strtoull(tmp_str, NULL, 10);
-    DISSECTOR_ASSERT(errno == 0);
-    tmp_item = proto_tree_add_uint(tree, hf_dns_qry_class, tvb, 0, 0, (guint32)tmp_uint);
-    proto_item_set_hidden(tmp_item);
     arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, class = %s", arg_str, tmp_str);
 
     return arg_str;
+}
+
+static gchar *do_dissect_dns_answer(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    gchar *tmp_str;
+    gint64 tmp_int;
+    proto_item *tmp_item;
+
+    // add type
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "answer_type")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_dnsanswer_type, tvb, 0, 0, tmp_str);
+
+    // add TTL
+    DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "ttl", &tmp_int));
+    proto_tree_add_uint_wanted(tree, hf_dnsanswer_ttl, tvb, 0, 0, (guint32)tmp_int);
+    tmp_item = proto_tree_add_uint(tree, hf_dns_resp_ttl, tvb, 0, 0, (guint32)tmp_int);
+    proto_item_set_hidden(tmp_item);
+
+    // add answer
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "answer")) != NULL);
+    proto_tree_add_string_wanted(tree, hf_dnsanswer_answer, tvb, 0, 0, tmp_str);
+    tmp_item = proto_tree_add_string(tree, hf_dns_resp_name, tvb, 0, 0, tmp_str);
+    proto_item_set_hidden(tmp_item);
+
+    return NULL;
+}
+
+static gchar *do_dissect_dns_response_data(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+{
+    jsmntok_t *query_tok, *answers_arr, *answer_tok;
+    proto_item *query_item, *answers_item, *answer_item;
+    proto_tree *query_tree, *answers_tree, *answer_tree;
+    int answers_len, i;
+
+    // dissect query data
+    DISSECTOR_ASSERT((query_tok = json_get_object(json_data, obj_tok, "query_data")) != NULL);
+    query_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(query_item, "%s", "query_data");
+    query_tree = proto_item_add_subtree(query_item, ett_dns_query_data);
+    do_dissect_dns_query_data(tvb, query_tree, json_data, query_tok);
+
+    // dissect query answer array
+    DISSECTOR_ASSERT((answers_arr = json_get_array(json_data, obj_tok, "dns_answer")) != NULL);
+    DISSECTOR_ASSERT((answers_len = json_get_array_len(answers_arr)) >= 0);
+    answers_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(answers_item, "dns_answer: %d item%s", answers_len, answers_len == 1 ? "" : "s");
+    answers_tree = proto_item_add_subtree(answers_item, ett_arg_obj_arr);
+
+    // go through each answer and dissect it
+    for (i = 0; i < answers_len; i++) {
+        // add item subtree
+        answer_item = proto_tree_add_item(answers_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+        proto_item_set_text(answer_item, "dns_answer[%d]", i);
+        answer_tree = proto_item_add_subtree(answer_item, ett_arg_obj);
+
+        // call dissector for the object
+        DISSECTOR_ASSERT((answer_tok = json_get_array_index(answers_arr, i)) != NULL);
+        do_dissect_dns_answer(tvb, answer_tree, json_data, answer_tok);
+    }
+    
+    return NULL;
 }
 
 static gchar *dissect_http_headers(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *headers_tok)
@@ -1525,6 +1581,12 @@ static gchar *dissect_dns_query_data(tvbuff_t *tvb, proto_tree *tree,
     return dissect_object_array_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_dns_query_data);
 }
 
+static gchar *dissect_dns_response_data(tvbuff_t *tvb, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_object_array_arg(tvb, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_dns_response_data);
+}
+
 static gchar *dissect_proto_http_request(tvbuff_t *tvb, proto_tree *tree,
     hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
@@ -2088,9 +2150,9 @@ static void init_complex_types(void) {
     add_supported_type("trace.ProtoHTTP", dissect_proto_http);
     add_supported_type("map[string]trace.HookedSymbolData", dissect_hooked_symbol_data_map);
     add_supported_type("[]trace.HookedSymbolData", dissect_hooked_symbol_data_arr);
+    add_supported_type("[]trace.DnsResponseData", dissect_dns_response_data);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
-    add_unsupported_type("[]trace.DnsResponseData");
     add_unsupported_type("trace.ProtoTCP");
     add_unsupported_type("trace.ProtoUDP");
     add_unsupported_type("struct file_operations *");
@@ -2158,7 +2220,8 @@ void proto_register_tracee(void)
         &ett_arg_obj,
         &ett_arg_obj_arr,
         &ett_http_headers,
-        &ett_hooked_symbols_map
+        &ett_hooked_symbols_map,
+        &ett_dns_query_data
     };
 
     static hf_register_info hf[] = {
@@ -2540,14 +2603,14 @@ void proto_register_tracee(void)
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
-        { &hf_dns_qry_type,
-          { "dns.qry.type", "dns.qry.type",
-            FT_UINT16, BASE_DEC|BASE_EXT_STRING, &dns_types_vals_ext, 0,
+        { &hf_dns_resp_ttl,
+          { "dns.resp.ttl", "dns.resp.ttl",
+            FT_UINT32, BASE_DEC, NULL, 0,
             NULL, HFILL }
         },
-        { &hf_dns_qry_class,
-          { "dns.qry.class", "dns.qry.class",
-            FT_UINT16, BASE_HEX, VALS(dns_classes), 0,
+        { &hf_dns_resp_name,
+          { "dns.resp.name", "dns.resp.name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
         { &hf_http_request,
@@ -2821,7 +2884,7 @@ void proto_register_tracee(void)
         },
     };
 
-    static hf_register_info dns_query_data_hf[] = {
+    static hf_register_info dns_hf[] = {
         { &hf_dnsquery_query,
           { "Query", "tracee.dnsquery.query",
             FT_STRINGZ, BASE_NONE, NULL, 0,
@@ -2836,7 +2899,22 @@ void proto_register_tracee(void)
           { "Class", "tracee.dnsquery.class",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "DNS query class", HFILL }
-        }
+        },
+        { &hf_dnsanswer_type,
+          { "Type", "tracee.dnsanswer.type",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "DNS answer type", HFILL }
+        },
+        { &hf_dnsanswer_ttl,
+          { "TTL", "tracee.dnsanswer.ttl",
+            FT_UINT32, BASE_DEC, NULL, 0,
+            "DNS answer TTL", HFILL }
+        },
+        { &hf_dnsanswer_answer,
+          { "Answer", "tracee.dnsanswer.answer",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "DNS answer", HFILL }
+        },
     };
 
     static hf_register_info proto_http_request_hf[] = {
@@ -2952,7 +3030,7 @@ void proto_register_tracee(void)
     proto_register_field_array(proto_tracee, sockaddr_hf, array_length(sockaddr_hf));
     proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
     proto_register_field_array(proto_tracee, pktmeta_hf, array_length(pktmeta_hf));
-    proto_register_field_array(proto_tracee, dns_query_data_hf, array_length(dns_query_data_hf));
+    proto_register_field_array(proto_tracee, dns_hf, array_length(dns_hf));
     proto_register_field_array(proto_tracee, proto_http_request_hf, array_length(proto_http_request_hf));
     proto_register_field_array(proto_tracee, packet_metadata_hf, array_length(packet_metadata_hf));
     proto_register_field_array(proto_tracee, proto_http_hf, array_length(proto_http_hf));
