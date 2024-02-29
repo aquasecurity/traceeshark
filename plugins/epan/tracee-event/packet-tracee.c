@@ -2141,6 +2141,7 @@ static void init_complex_types(void) {
     add_supported_type("unknown", dissect_unknown_arg);
     add_supported_type("const char*const*", dissect_string_array);
     add_supported_type("const char**", dissect_string_array);
+    add_supported_type("const char **", dissect_string_array);
     add_supported_type("struct sockaddr*", dissect_sockaddr);
     add_supported_type("slim_cred_t", dissect_slim_cred_t);
     add_supported_type("trace.PktMeta", dissect_pktmeta);
@@ -2202,6 +2203,7 @@ static void init_complex_types(void) {
     add_unsupported_type("struct clone_args*");
     add_unsupported_type("trace.ProtoIPv4");
     add_unsupported_type("trace.ProtoHTTPResponse");
+    add_unsupported_type("struct mmsghdr*");
 }
 
 void proto_register_tracee(void)
