@@ -4,7 +4,6 @@ from typing import Dict, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
-import fcntl
 import json
 import os
 import select
@@ -17,18 +16,30 @@ import sys
 from threading import Thread
 from time import sleep
 
+LINUX = sys.platform.startswith('linux')
+
+if not LINUX:
+    raise NotImplementedError()
+
+if LINUX:
+    import fcntl
+    TMP_DIR = '/tmp/traceeshark'
+    os.makedirs(TMP_DIR, exist_ok=True)
+
 
 DLT_USER0 = 147
-TRACEE_OUTPUT_PIPE = '/tmp/tracee_output.pipe'
+TRACEE_OUTPUT_PIPE = os.path.join(TMP_DIR, 'tracee_output.pipe')
 TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
 F_SETPIPE_SZ = 1031 # python < 3.10 does not have fcntl.F_SETPIPE_SZ
 DATA_PORT = 4000
 CTRL_PORT = 4001
 READER_COMM = 'tracee-capture'
-SSH_CTL_SOCK_DATA = '/tmp/sshctl_data.sock'
-SSH_CTL_SOCK_CTRL = '/tmp/sshctl_ctrl.sock'
-REMOTE_CAPTURE_SCRIPT_PATH = '/tmp/remote-capture.py'
-REMOTE_CAPTURE_CONFIG_PATH = '/tmp/remote-config.json'
+SSH_CTL_SOCK_DATA = os.path.join(TMP_DIR, 'sshctl_data.sock')
+SSH_CTL_SOCK_CTRL = os.path.join(TMP_DIR, 'sshctl_ctrl.sock')
+REMOTE_CAPTURE_SCRIPT_REMOTE_PATH = '/tmp/remote-capture.py'
+REMOTE_CAPTURE_CONFIG_LOCAL_PATH = os.path.join(TMP_DIR, 'remote-config.json')
+REMOTE_CAPTURE_CONFIG_REMOTE_PATH = '/tmp/remote-config.json'
+REMOTE_CAPTURE_LOGFILE_REMOTE_PATH = '/tmp/tracee_logs.log'
 
 GENERAL_GROUP = 'General'
 REMOTE_GROUP = 'Remote capture'
@@ -39,7 +50,7 @@ DEFAULT_CAPTURE_TYPE = 'local'
 DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
 DEFAULT_CONTAINER_NAME = 'tracee'
-DEFAULT_LOGFILE = '/tmp/tracee_logs.log'
+DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 
 
 class SSHOptions:
@@ -121,12 +132,12 @@ ssh_opts: SSHOptions = None
 
 
 def show_version():
-    print("extcap {version=1.0}{help=https://www.wireshark.org}{display=Tracee}")
+    print("extcap {version=0.1.2}{help=https://www.wireshark.org}{display=Tracee}")
 
 
 def show_interfaces():
-    print("extcap {version=1.0}{help=https://www.wireshark.org}{display=Tracee}")
-    print("interface {value=tracee}{display=Tracee local capture}")
+    print("extcap {version=0.1.2}{help=https://www.wireshark.org}{display=Tracee}")
+    print("interface {value=tracee}{display=Tracee capture}")
 
 
 class ConfigArg:
@@ -586,7 +597,7 @@ def cleanup():
         pass
 
     try:
-        os.remove(REMOTE_CAPTURE_CONFIG_PATH)
+        os.remove(REMOTE_CAPTURE_CONFIG_LOCAL_PATH)
     except FileNotFoundError:
         pass
 
@@ -608,11 +619,11 @@ def cleanup():
             pass
 
         # delete remote capture script
-        command = f'ssh {ssh_opts} "rm {REMOTE_CAPTURE_SCRIPT_PATH}"'
+        command = f'ssh {ssh_opts} "rm {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}"'
         send_ssh_command(command, ssh_opts)
 
         # delete remote tracee logs file
-        command = f'ssh {ssh_opts} "rm {DEFAULT_LOGFILE}"'
+        command = f'ssh {ssh_opts} "rm {REMOTE_CAPTURE_LOGFILE_REMOTE_PATH}"'
         send_ssh_command(command, ssh_opts)
 
 
@@ -765,12 +776,12 @@ def capture_remote(args: argparse.Namespace):
     
     # copy remote capture script
     remote_capture_script = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'remote-capture.py')
-    command = f'scp {ssh_opts.options} {remote_capture_script} {ssh_opts.server}:{REMOTE_CAPTURE_SCRIPT_PATH}'
+    command = f'scp {ssh_opts.options} {remote_capture_script} {ssh_opts.server}:{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}'
     _, err, returncode = send_ssh_command(command, ssh_opts)
     if returncode != 0:
         error(f'error copying capture script:\n{err}')
     
-    command = f'ssh {ssh_opts} "chmod +x {REMOTE_CAPTURE_SCRIPT_PATH}"'
+    command = f'ssh {ssh_opts} "chmod +x {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}"'
     _, err, returncode = send_ssh_command(command, ssh_opts)
     if returncode != 0:
         error(f'error setting remote capture script as executable:\n{err}')
@@ -785,10 +796,10 @@ def capture_remote(args: argparse.Namespace):
         'tracee_options': tracee_options
     }
 
-    with open(REMOTE_CAPTURE_CONFIG_PATH, 'w') as f:
+    with open(REMOTE_CAPTURE_CONFIG_LOCAL_PATH, 'w') as f:
         f.write(json.dumps(config))
     
-    command = f'scp {ssh_opts.options} {REMOTE_CAPTURE_CONFIG_PATH} {ssh_opts.server}:{REMOTE_CAPTURE_CONFIG_PATH}'
+    command = f'scp {ssh_opts.options} {REMOTE_CAPTURE_CONFIG_LOCAL_PATH} {ssh_opts.server}:{REMOTE_CAPTURE_CONFIG_REMOTE_PATH}'
     _, err, returncode = send_ssh_command(command, ssh_opts)
     if returncode != 0:
         error(f'error copying capture config:\n{err}')
@@ -803,7 +814,7 @@ def capture_remote(args: argparse.Namespace):
     control_th.start()
     
     # run remote capture script (blocks until it exits)
-    command = f'ssh {ssh_opts} "{REMOTE_CAPTURE_SCRIPT_PATH} {REMOTE_CAPTURE_CONFIG_PATH}"'
+    command = f'ssh {ssh_opts} "{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH} {REMOTE_CAPTURE_CONFIG_REMOTE_PATH}"'
     _, err, returncode = send_ssh_command(command, ssh_opts)
     if returncode != 0:
         error(f'error running remote capture script:\n{err}')
@@ -813,7 +824,7 @@ def capture_remote(args: argparse.Namespace):
     control_th.join()
     
     # copy tracee logs file
-    command = f'scp {ssh_opts}:{DEFAULT_LOGFILE} {args.logfile}'
+    command = f'scp {ssh_opts}:{REMOTE_CAPTURE_LOGFILE_REMOTE_PATH} {args.logfile}'
     _, err, returncode = send_ssh_command(command, ssh_opts)
     if returncode != 0:
         error(f'error copying tracee logs:\n{err}')
