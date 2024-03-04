@@ -2204,6 +2204,8 @@ static void init_complex_types(void) {
     add_unsupported_type("trace.ProtoIPv4");
     add_unsupported_type("trace.ProtoHTTPResponse");
     add_unsupported_type("struct mmsghdr*");
+    add_unsupported_type("trace.ProtoICMPv6");
+    add_unsupported_type("struct tms*");
 }
 
 void proto_register_tracee(void)
