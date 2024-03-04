@@ -38,7 +38,7 @@ build:
 
 # update private configuration profile
 install:
-	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+"))
+	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+"))
 	@mkdir -p ~/.config/wireshark
 	@cp -r profiles ~/.config/wireshark
 	
@@ -126,6 +126,6 @@ dist: all
 	@if [ $(OS_NAME) = "Linux" ]; then\
 		cp -r extcap dist/workdir; \
 	fi
-	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+"))
+	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))
 	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
 	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .

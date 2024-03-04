@@ -1,8 +1,8 @@
 #!/bin/bash
 
-WS_VERSION_WANTED=$(cat ws_version.txt | grep -o -P "\d+\.\d+\.\d+")
+WS_VERSION_WANTED=$(cat ws_version.txt | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+")
 if command -v "wireshark" &> /dev/null; then
-    WS_VERSION_EXISTS=$(wireshark --version | grep -o -P "Wireshark \d+\.\d+\.\d+" | grep -o -P "\d+\.\d+\.\d+")
+    WS_VERSION_EXISTS=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+")
     if [ "$WS_VERSION_WANTED" != "$WS_VERSION_EXISTS" ]; then
         read -p "Plugins were compiled for Wireshark $WS_VERSION_WANTED but you have version $WS_VERSION_EXISTS, install plugins anyway? (y/n): " user_input
         if [[ "$user_input" != "y" && "$user_input" != "Y" ]]; then
