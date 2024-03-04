@@ -16,14 +16,12 @@ import sys
 from threading import Thread
 from time import sleep
 
+import msgpack
 import paramiko
 
 LINUX = sys.platform.startswith('linux')
 WINDOWS = os.name == 'nt'
 MAC = sys.platform == 'darwin'
-
-if LINUX:
-    import fcntl
 
 
 if WINDOWS:
@@ -37,9 +35,7 @@ else:
 
 EXTCAP_VERSION = '0.1.2'
 DLT_USER0 = 147
-TRACEE_OUTPUT_PIPE = os.path.join(TMP_DIR, 'tracee_output.pipe')
-TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
-F_SETPIPE_SZ = 1031 # python < 3.10 does not have fcntl.F_SETPIPE_SZ
+TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
 CTRL_PORT = 4001
 REMOTE_CAPTURE_SCRIPT_REMOTE_PATH = '/tmp/remote-capture.py'
@@ -449,58 +445,49 @@ def read_output(extcap_pipe: str):
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
     # TODO: using a PID is more robust, but currently there is no way to filter by PID in namespace (required when running on WSL)
-    if local:
+    if local and LINUX:
         set_proc_name(READER_COMM)
+    
+    # create msgpack unpacker
+    unpacker = msgpack.Unpacker(raw=True)
     
     # open extcap pipe
     extcap_pipe_f = open(extcap_pipe, 'wb')
 
     # write fake PCAP header
     extcap_pipe_f.write(get_fake_pcap_header())
-
-    if local:
-        # open tracee output pipe
-        tracee_output_pipe_f = os.open(TRACEE_OUTPUT_PIPE, os.O_RDONLY | os.O_NONBLOCK)
-        fcntl.fcntl(tracee_output_pipe_f, F_SETPIPE_SZ, TRACEE_OUTPUT_PIPE_CAPACITY)
     
-    else:
-        # open tracee output socket and listen for an incoming connection
-        tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tracee_output_sock.bind(('127.0.0.1', DATA_PORT))
-        tracee_output_sock.listen(0)
-        tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, TRACEE_OUTPUT_PIPE_CAPACITY)
-        tracee_output_sock.settimeout(0.1)
+    # open tracee output socket and listen for an incoming connection
+    tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tracee_output_sock.bind(('127.0.0.1', DATA_PORT))
+    tracee_output_sock.listen(0)
+    tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, TRACEE_OUTPUT_BUF_CAPACITY)
+    tracee_output_sock.settimeout(0.1)
 
-        tracee_output_conn = None
-        while running:
-            try:
-                tracee_output_conn, _ = tracee_output_sock.accept()
-                tracee_output_conn.settimeout(0.1)
-                break
-            except socket.timeout:
-                continue
+    tracee_output_conn = None
+    while running:
+        try:
+            tracee_output_conn, _ = tracee_output_sock.accept()
+            tracee_output_conn.settimeout(0.1)
+            break
+        except socket.timeout:
+            continue
 
     # read events until the the capture stops
     while running:
-        if local:
-            r, _, _ = select.select([ tracee_output_pipe_f ], [], [], 0.1)
-            if tracee_output_pipe_f in r:
-                data = os.read(tracee_output_pipe_f, TRACEE_OUTPUT_PIPE_CAPACITY)
-            else:
-                continue
-        else:
-            try:
-                data = recv_msg(tracee_output_conn)
-            except TimeoutError:
-                continue
-            except BrokenPipeError:
-                break
+        try:
+            # read data and feed it to the unpacker
+            data = tracee_output_conn.recv(TRACEE_OUTPUT_BUF_CAPACITY)
+            unpacker.feed(data)
+        except TimeoutError:
+            continue
+        except BrokenPipeError:
+            break
 
-        # split read data into individual events (TODO: this method might hurt perf, might want to search for newlines while reading)
-        for event in data.split(b'\n'):
-            if len(event) > 0:
-                write_event(event, extcap_pipe_f)
+        # unpack any ready events and write them to wireshark's pipe
+        for entry in unpacker:
+            write_event(entry[2][b'event'], extcap_pipe_f)
         try:
             extcap_pipe_f.flush()
         # on windows wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the wireshark pipe breaks
@@ -508,12 +495,9 @@ def read_output(extcap_pipe: str):
             stop_capture()
             break
     
-    if local:
-        os.close(tracee_output_pipe_f)
-    else:
-        if tracee_output_conn is not None:
-            tracee_output_conn.close()
-        tracee_output_sock.close()
+    if tracee_output_conn is not None:
+        tracee_output_conn.close()
+    tracee_output_sock.close()
     try:
         extcap_pipe_f.close()
     except OSError:
@@ -521,7 +505,10 @@ def read_output(extcap_pipe: str):
 
 
 def send_command(command: str) -> Tuple[bytes, bytes, int]:
-    proc = subp.Popen(['/bin/sh', '-c', command], stdout=subp.PIPE, stderr=subp.PIPE)
+    if WINDOWS:
+        proc = subp.Popen(['cmd.exe', '/C', command], stdout=subp.PIPE, stderr=subp.PIPE)
+    else:
+        proc = subp.Popen(['/bin/sh', '-c', command], stdout=subp.PIPE, stderr=subp.PIPE)
     out, err = proc.communicate()
     return out, err, proc.returncode
 
@@ -537,11 +524,6 @@ def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str
 
 def cleanup():
     global local, ssh_client
-
-    try:
-        os.remove(TRACEE_OUTPUT_PIPE)
-    except FileNotFoundError:
-        pass
 
     try:
         os.remove(REMOTE_CAPTURE_CONFIG_LOCAL_PATH)
@@ -575,16 +557,6 @@ def capture_local(args: argparse.Namespace):
 
     tracee_options = get_effective_tracee_options(args)
 
-    # create pipe to get events from tracee
-    if os.path.isdir(TRACEE_OUTPUT_PIPE):
-        os.rmdir(TRACEE_OUTPUT_PIPE)
-    else:
-        try:
-            os.remove(TRACEE_OUTPUT_PIPE)
-        except FileNotFoundError:
-            pass
-    os.mkfifo(TRACEE_OUTPUT_PIPE)
-
     # create file to get logs from tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
@@ -599,13 +571,13 @@ def capture_local(args: argparse.Namespace):
     if len(args.container_name) > 0:
         command += f' --name {args.container_name}'
     
-    command += f' {args.docker_options} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {args.logfile}:/logs.log:rw {args.container_image} {tracee_options}'
+    command += f' {args.docker_options} -v {args.logfile}:/logs.log:rw {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
         command += f' --scope comm!="{READER_COMM}" --scope comm!=tracee --scope comm!=wireshark --scope comm!=dumpcap'
     
-    command += f' -o json:/output.pipe --log file:/logs.log'
+    command += f' --output forward:tcp://host.docker.internal:{DATA_PORT} --log file:/logs.log'
 
     out, err, returncode = send_command(command)
     if returncode != 0:
@@ -837,8 +809,6 @@ def tracee_capture(args: argparse.Namespace):
     signal.signal(signal.SIGTERM, exit_cb)
 
     if local:
-        if not LINUX:
-            error('local capturing is currently only supported on Linux')
         capture_local(args)
     else:
         capture_remote(args)
