@@ -558,7 +558,11 @@ def capture_local(args: argparse.Namespace):
 
     # add exclusions that may spam the capture
     if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
-        command += f' --scope comm!="{READER_COMM}" --scope comm!=tracee --scope comm!=wireshark --scope comm!=dumpcap'
+        command += f' --scope comm!=tracee'
+        
+        # these exclusions are needed only when Wireshark is running on the same host that is being recorded
+        if LINUX:
+            command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
     command += f' --output forward:tcp://host.docker.internal:{DATA_PORT} --log file:/logs.log'
 
