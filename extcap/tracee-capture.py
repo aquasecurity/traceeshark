@@ -403,27 +403,6 @@ def set_proc_name(newname: str):
     libc.prctl(15, byref(buff), 0, 0, 0)
 
 
-def recvall(conn: socket.socket, length: int):
-    # helper function to recv n bytes or return None if EOF is hit
-    data = bytearray()
-    while len(data) < length:
-        packet = conn.recv(length - len(data))
-        if not packet:
-            return None
-        data.extend(packet)
-    return data
-
-
-def recv_msg(conn: socket.socket):
-    # read message length and unpack it into an integer
-    raw_msglen = recvall(conn, 4)
-    if not raw_msglen:
-        return None
-    msglen = struct.unpack('>I', raw_msglen)[0]
-    # read the message data
-    return recvall(conn, msglen)
-
-
 def stop_capture():
     global running, container_id, local
 
@@ -460,7 +439,7 @@ def read_output(extcap_pipe: str):
     # open tracee output socket and listen for an incoming connection
     tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    tracee_output_sock.bind(('127.0.0.1', DATA_PORT))
+    tracee_output_sock.bind(('', DATA_PORT))
     tracee_output_sock.listen(0)
     tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, TRACEE_OUTPUT_BUF_CAPACITY)
     tracee_output_sock.settimeout(0.1)
@@ -570,6 +549,10 @@ def capture_local(args: argparse.Namespace):
 
     if len(args.container_name) > 0:
         command += f' --name {args.container_name}'
+    
+    # host.docker.internal is default on docker for Windows and Mac
+    if LINUX:
+        command += f' --add-host host.docker.internal:host-gateway'
     
     command += f' {args.docker_options} -v {args.logfile}:/logs.log:rw {args.container_image} {tracee_options}'
 
