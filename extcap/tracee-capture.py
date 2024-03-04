@@ -19,12 +19,18 @@ from time import sleep
 import paramiko
 
 LINUX = sys.platform.startswith('linux')
-
-if not LINUX:
-    raise NotImplementedError()
+WINDOWS = os.name == 'nt'
+MAC = sys.platform == 'darwin'
 
 if LINUX:
     import fcntl
+
+
+if WINDOWS:
+    APPDATA = os.getenv('APPDATA')
+    TMP_DIR = os.path.join(APPDATA, 'Traceeshark')
+
+else:
     TMP_DIR = '/tmp/traceeshark'
     os.makedirs(TMP_DIR, exist_ok=True)
 
@@ -422,12 +428,29 @@ def recv_msg(conn: socket.socket):
     return recvall(conn, msglen)
 
 
+def stop_capture():
+    global running, container_id, local
+
+    running = False
+
+    if local:
+        if container_id is None:
+            cleanup()
+            sys.exit(0)
+
+        command = f'docker kill {container_id}'
+        _, err, returncode = send_command(command)
+        if returncode != 0:
+            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}')
+
+
 def read_output(extcap_pipe: str):
-    global running
+    global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
     # TODO: using a PID is more robust, but currently there is no way to filter by PID in namespace (required when running on WSL)
-    set_proc_name(READER_COMM)
+    if local:
+        set_proc_name(READER_COMM)
     
     # open extcap pipe
     extcap_pipe_f = open(extcap_pipe, 'wb')
@@ -478,7 +501,12 @@ def read_output(extcap_pipe: str):
         for event in data.split(b'\n'):
             if len(event) > 0:
                 write_event(event, extcap_pipe_f)
-        extcap_pipe_f.flush()
+        try:
+            extcap_pipe_f.flush()
+        # on windows wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the wireshark pipe breaks
+        except OSError:
+            stop_capture()
+            break
     
     if local:
         os.close(tracee_output_pipe_f)
@@ -486,7 +514,10 @@ def read_output(extcap_pipe: str):
         if tracee_output_conn is not None:
             tracee_output_conn.close()
         tracee_output_sock.close()
-    extcap_pipe_f.close()
+    try:
+        extcap_pipe_f.close()
+    except OSError:
+        pass
 
 
 def send_command(command: str) -> Tuple[bytes, bytes, int]:
@@ -535,20 +566,8 @@ def error(msg: str) -> NoReturn:
     sys.exit(1)
 
 
-def stop_capture(_signum, _frame):
-    global running, container_id, local
-
-    running = False
-
-    if local:
-        if container_id is None:
-            cleanup()
-            sys.exit(0)
-
-        command = f'docker kill {container_id}'
-        _, err, returncode = send_command(command)
-        if returncode != 0:
-            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}')
+def exit_cb(_signum, _frame):
+    stop_capture()
 
 
 def capture_local(args: argparse.Namespace):
@@ -648,9 +667,12 @@ def control_worker():
     ctrl_sock.close()
 
 
-def handle_connection(channel, dst_addr: str, dst_port: int):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: int):
+    # wait for incoming connection
+    channel = transport.accept(None)
 
+    # connect to the tunnel's receiving end
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((dst_addr, dst_port))
     except ConnectionRefusedError:
@@ -680,16 +702,11 @@ def handle_connection(channel, dst_addr: str, dst_port: int):
     sock.close()
 
 
-def create_ssh_tunnel(transport: paramiko.Transport, remote_port: int, local_addr: str, local_port: int):
-    transport.request_port_forward(local_addr, remote_port)
-    channel = transport.accept(None)
-    handle_connection(channel, local_addr, local_port)
-
-
 def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
     ssh_client = paramiko.SSHClient()
     ssh_client.load_system_host_keys()
     ssh_client.set_missing_host_key_policy(paramiko.WarningPolicy())
+
     try:
         ssh_client.connect(
             hostname=args.remote_host,
@@ -699,8 +716,14 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
             key_filename=args.ssh_privkey,
             passphrase=args.ssh_passphrase
         )
+    
     except paramiko.SSHException as ex:
         error(str(ex))
+    
+    # there is a bug where paramiko tries to interpret an RSA key as a DSS key,
+    # this only seems to happen when the key is invalid for this connection
+    except ValueError:
+        error('cannot authenticate using this private key')
 
     return ssh_client
 
@@ -712,18 +735,42 @@ def capture_remote(args: argparse.Namespace):
 
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
+
+    # on Windows, the previous capture doesn't terminate before the current one when restarting the capture,
+    # so we have to wait a bit to give the previous capture a chance to clean up its forwarded ports
+    for _ in range(10):
+        try:
+            ssh_data_client.get_transport().request_port_forward('127.0.0.1', DATA_PORT)
+        except paramiko.SSHException as ex:
+            # not Windows - this failure is not because of a previous capture that is in the process of stopping
+            if not WINDOWS:
+                error(str(ex))
+            
+            if 'TCP forwarding request denied' in str(ex):
+                # retry in 1 second
+                sleep(1)
+            # unrelated error
+            else:
+                error(str(ex))
+        else:
+            break
+    
     ssh_data_forwarder = Thread(
-        target=create_ssh_tunnel,
-        args=(ssh_data_client.get_transport(), DATA_PORT, '127.0.0.1', DATA_PORT),
+        target=handle_connection,
+        args=(ssh_data_client.get_transport(), '127.0.0.1', DATA_PORT),
         daemon=True
     )
     ssh_data_forwarder.start()
     
     # prepare ssh tunnel for control
     ssh_ctrl_client = ssh_connect(args)
+    try:
+        ssh_ctrl_client.get_transport().request_port_forward('127.0.0.1', CTRL_PORT)
+    except paramiko.SSHException as ex:
+        error(str(ex))
     ssh_ctrl_forwarder = Thread(
-        target=create_ssh_tunnel,
-        args=(ssh_ctrl_client.get_transport(), CTRL_PORT, '127.0.0.1', CTRL_PORT),
+        target=handle_connection,
+        args=(ssh_ctrl_client.get_transport(), '127.0.0.1', CTRL_PORT),
         daemon=True
     )
     ssh_ctrl_forwarder.start()
@@ -786,10 +833,12 @@ def tracee_capture(args: argparse.Namespace):
         error('no image or docker options provided')
     
     # catch termination signals from wireshark
-    signal.signal(signal.SIGINT, stop_capture)
-    signal.signal(signal.SIGTERM, stop_capture)
+    signal.signal(signal.SIGINT, exit_cb)
+    signal.signal(signal.SIGTERM, exit_cb)
 
     if local:
+        if not LINUX:
+            error('local capturing is currently only supported on Linux')
         capture_local(args)
     else:
         capture_remote(args)
@@ -871,5 +920,5 @@ def main():
 
 if __name__ == '__main__':
     #sys.stderr.write(f'{sys.argv}\n')
-    #sys.stderr = open('/tmp/traceeshark/capture_stderr.log', 'w')
+    #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
     main()
