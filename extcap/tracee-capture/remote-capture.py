@@ -31,8 +31,14 @@ def send_command(command: str) -> Tuple[bytes, bytes, int]:
 
 
 def cleanup():
-    os.remove(TRACEE_OUTPUT_PIPE)
-    os.remove(sys.argv[1])
+    try:
+        os.remove(TRACEE_OUTPUT_PIPE)
+    except FileNotFoundError:
+        pass
+    try:
+        os.remove(sys.argv[1])
+    except FileNotFoundError:
+        pass
 
 
 def error(msg: str) -> NoReturn:
@@ -71,6 +77,7 @@ def control_worker(ctrl_port: int):
 
     ctrl_sock.settimeout(0.1)
 
+    msg = None
     while running:
         try:
             msg = ctrl_sock.recv(1024)
@@ -79,7 +86,7 @@ def control_worker(ctrl_port: int):
         else:
             break
     
-    if msg != b'stop':
+    if msg is not None and msg != b'stop':
         raise ValueError()
 
     ctrl_sock.close()
@@ -175,6 +182,7 @@ def main():
     command += f" {config['docker_options']} -v {TRACEE_OUTPUT_PIPE}:/output.pipe:rw -v {TRACEE_LOGS_FILE}:/logs.log:rw {config['container_image']} {config['tracee_options']}"
 
     # add exclusion for reader that may spam the capture
+    # TODO: add exclusion to sshd which handles data port forwarding
     if 'comm=' not in config['tracee_options']: # make sure there is no comm filter in place, otherwise it will be overriden
         command += f' --scope comm!="{READER_COMM}" --scope comm!=tracee'
     
@@ -197,7 +205,7 @@ def main():
     if returncode != 0:
         error(f'docker wait returned with error code {returncode}, stderr dump:\n{err}')
     
-    running = False    
+    running = False
     reader_th.join()
     
     # check tracee logs for errors

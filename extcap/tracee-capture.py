@@ -16,6 +16,8 @@ import sys
 from threading import Thread
 from time import sleep
 
+import paramiko
+
 LINUX = sys.platform.startswith('linux')
 
 if not LINUX:
@@ -27,19 +29,18 @@ if LINUX:
     os.makedirs(TMP_DIR, exist_ok=True)
 
 
+EXTCAP_VERSION = '0.1.2'
 DLT_USER0 = 147
 TRACEE_OUTPUT_PIPE = os.path.join(TMP_DIR, 'tracee_output.pipe')
 TRACEE_OUTPUT_PIPE_CAPACITY = 262144 # enough to hold the largest event encountered so far
 F_SETPIPE_SZ = 1031 # python < 3.10 does not have fcntl.F_SETPIPE_SZ
 DATA_PORT = 4000
 CTRL_PORT = 4001
-READER_COMM = 'tracee-capture'
-SSH_CTL_SOCK_DATA = os.path.join(TMP_DIR, 'sshctl_data.sock')
-SSH_CTL_SOCK_CTRL = os.path.join(TMP_DIR, 'sshctl_ctrl.sock')
 REMOTE_CAPTURE_SCRIPT_REMOTE_PATH = '/tmp/remote-capture.py'
 REMOTE_CAPTURE_CONFIG_LOCAL_PATH = os.path.join(TMP_DIR, 'remote-config.json')
 REMOTE_CAPTURE_CONFIG_REMOTE_PATH = '/tmp/remote-config.json'
 REMOTE_CAPTURE_LOGFILE_REMOTE_PATH = '/tmp/tracee_logs.log'
+READER_COMM = 'tracee-capture'
 
 GENERAL_GROUP = 'General'
 REMOTE_GROUP = 'Remote capture'
@@ -53,90 +54,18 @@ DEFAULT_CONTAINER_NAME = 'tracee'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 
 
-class SSHOptions:
-    def __init__(self,
-                 address: Optional[str],
-                 port: int,
-                 username: Optional[str],
-                 password: Optional[str],
-                 privkey: Optional[str],
-                 passphrase: Optional[str],
-                 host: Optional[str]):
-        self.address = address
-        self.port = port
-        self.username = username
-        self.password = password
-        self.privkey = privkey
-        self.passphrase = passphrase
-        self.host = host
-
-        if host is not None:
-            if address is not None or username is not None or password is not None or privkey is not None or passphrase is not None:
-                raise ValueError('invalid use of SSH host together with other options')
-
-        else:
-            if address is None:
-                raise ValueError('no address specified')
-            if username is None:
-                raise ValueError('no username specified')
-            if password is not None and privkey is not None:
-                raise ValueError('invalid use of private key together with password')
-            if password is not None and passphrase is not None:
-                raise ValueError('invalid use of passphrase toghether with password')
-    
-    @property
-    def options(self) -> str:
-        ssh_opts = ''
-
-        if self.privkey is not None:
-            ssh_opts += f' -i {self.privkey}'
-        
-        if self.port != 22:
-            ssh_opts += f' -p {self.port}'
-        
-        return ssh_opts
-    
-    @property
-    def server(self) -> str:
-        if self.host is not None:
-            return self.host
-        elif self.username is not None and self.address is not None:
-            return f' {self.username}@{self.address}'
-        else:
-            raise ValueError()
-    
-    def __str__(self) -> str:
-        ssh_opts = ''
-
-        if self.privkey is not None:
-            ssh_opts += f' -i {self.privkey}'
-        
-        if self.port != 22:
-            ssh_opts += f' -p {self.port}'
-        
-        if self.username is not None and self.address is not None:
-            ssh_opts += f' {self.username}@{self.address}'
-        elif self.host is not None:
-            ssh_opts += f' {self.host}'
-        else:
-            raise ValueError()
-        
-        return ssh_opts
-
-
 container_id = None
 running = True
-reader_th = None
 local = True
-ssh_opts: SSHOptions = None
+ssh_client: paramiko.SSHClient = None
 
 
 def show_version():
-    print("extcap {version=0.1.2}{help=https://www.wireshark.org}{display=Tracee}")
+    print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
 
 
 def show_interfaces():
-    print("extcap {version=0.1.2}{help=https://www.wireshark.org}{display=Tracee}")
+    print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
     print("interface {value=tracee}{display=Tracee capture}")
 
 
@@ -282,10 +211,6 @@ def show_config(reload_option: Optional[str]):
             group=REMOTE_GROUP
         ),
         ConfigArg(call='--ssh-passphrase', display='SSH key passphrase', type='password',
-            group=REMOTE_GROUP
-        ),
-        ConfigArg(call='--ssh-host', display='SSH saved host', type='string',
-            tooltip='Host saved in the ~/.ssh/config file, assuming it contains all info needed for connecting',
             group=REMOTE_GROUP
         ),
         ConfigArg(call='--custom-tracee-options', display='Custom tracee options', type='string',
@@ -524,9 +449,11 @@ def read_output(extcap_pipe: str):
         tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, TRACEE_OUTPUT_PIPE_CAPACITY)
         tracee_output_sock.settimeout(0.1)
 
+        tracee_output_conn = None
         while running:
             try:
                 tracee_output_conn, _ = tracee_output_sock.accept()
+                tracee_output_conn.settimeout(0.1)
                 break
             except socket.timeout:
                 continue
@@ -542,6 +469,8 @@ def read_output(extcap_pipe: str):
         else:
             try:
                 data = recv_msg(tracee_output_conn)
+            except TimeoutError:
+                continue
             except BrokenPipeError:
                 break
 
@@ -554,19 +483,10 @@ def read_output(extcap_pipe: str):
     if local:
         os.close(tracee_output_pipe_f)
     else:
-        tracee_output_conn.close()
+        if tracee_output_conn is not None:
+            tracee_output_conn.close()
         tracee_output_sock.close()
     extcap_pipe_f.close()
-
-
-def construct_ssh_options(args: argparse.Namespace):
-    return SSHOptions(address=args.remote_host,
-                        port=args.remote_port,
-                        username=args.ssh_username,
-                        password=args.ssh_password,
-                        privkey=args.ssh_privkey,
-                        passphrase=args.ssh_passphrase,
-                        host=args.ssh_host)
 
 
 def send_command(command: str) -> Tuple[bytes, bytes, int]:
@@ -575,21 +495,17 @@ def send_command(command: str) -> Tuple[bytes, bytes, int]:
     return out, err, proc.returncode
 
 
-def send_ssh_command(command: str, ssh_opts: SSHOptions) -> Tuple[bytes, bytes, int]:
-    if not command.startswith('ssh ') and not command.startswith('scp '):
-        raise ValueError(f'invalid SSH command "{command}"')
-    
-    if ssh_opts.password is not None:
-        return send_command(f'sshpass -p {ssh_opts.password} {command}')
-    elif ssh_opts.passphrase is not None:
-        return send_command(f'sshpass -Ppassphrase -p {ssh_opts.passphrase} {command}')
-    else:
-        new_command = f'{command[:3]} -o BatchMode=yes {command[4:]}'
-        return send_command(new_command)
+def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str, int]:
+    _, stdout, stderr = client.exec_command(command)
+
+    stdout_lines = stdout.readlines() # this waits until command finishes
+    stderr_lines = stderr.readlines()
+
+    return ''.join(stdout_lines), ''.join(stderr_lines), stdout.channel.recv_exit_status()
 
 
 def cleanup():
-    global local, ssh_opts
+    global local, ssh_client
 
     try:
         os.remove(TRACEE_OUTPUT_PIPE)
@@ -600,45 +516,27 @@ def cleanup():
         os.remove(REMOTE_CAPTURE_CONFIG_LOCAL_PATH)
     except FileNotFoundError:
         pass
-
-    if not local and ssh_opts is not None:
-        # stop data SSH tunnel
-        command = f'ssh -S {SSH_CTL_SOCK_DATA} -O exit {ssh_opts.server}'
-        send_ssh_command(command, ssh_opts)
-        try:
-            os.remove(SSH_CTL_SOCK_DATA)
-        except FileNotFoundError:
-            pass
-        
-        # stop control SSH tunnel
-        command = f'ssh -S {SSH_CTL_SOCK_CTRL} -O exit {ssh_opts.server}'
-        send_ssh_command(command, ssh_opts)
-        try:
-            os.remove(SSH_CTL_SOCK_CTRL)
-        except FileNotFoundError:
-            pass
-
+    
+    if not local and ssh_client is not None:
         # delete remote capture script
-        command = f'ssh {ssh_opts} "rm {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}"'
-        send_ssh_command(command, ssh_opts)
+        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}')
 
         # delete remote tracee logs file
-        command = f'ssh {ssh_opts} "rm {REMOTE_CAPTURE_LOGFILE_REMOTE_PATH}"'
-        send_ssh_command(command, ssh_opts)
+        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_LOGFILE_REMOTE_PATH}')
 
 
 def error(msg: str) -> NoReturn:
     global running
     running = False
 
+    sys.stderr.write(f'{msg}\n')
     cleanup()
 
-    sys.stderr.write(f'{msg}\n')
     sys.exit(1)
 
 
-def stop_capture(signum, frame):
-    global running, container_id, local, ssh_opts
+def stop_capture(_signum, _frame):
+    global running, container_id, local
 
     running = False
 
@@ -674,7 +572,6 @@ def capture_local(args: argparse.Namespace):
     open(args.logfile, 'w').close()
 
     # start reader thread
-    global reader_th
     reader_th = Thread(target=read_output, args=(args.fifo,))
     reader_th.start()
 
@@ -705,7 +602,6 @@ def capture_local(args: argparse.Namespace):
         error(f'docker wait returned with error code {returncode}, stderr dump:\n{err}')
     
     running = False
-    reader_th.join()
     
     # check tracee logs for errors
     command = f'docker logs {container_id}'
@@ -752,37 +648,92 @@ def control_worker():
     ctrl_sock.close()
 
 
-def capture_remote(args: argparse.Namespace):
-    global ssh_opts
+def handle_connection(channel, dst_addr: str, dst_port: int):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     try:
-        ssh_opts = construct_ssh_options(args)
-    except ValueError as ex:
+        sock.connect((dst_addr, dst_port))
+    except ConnectionRefusedError:
+        sys.stderr.write(f'could not connect to {(dst_addr, dst_port)}\n')
+        return
+    
+    while True:
+        r, _, _ = select.select([sock, channel], [], [])
+        if sock in r:
+            try:
+                data = sock.recv(1024)
+                if len(data) == 0:
+                    break
+                channel.send(data)
+            except ConnectionResetError:
+                break
+        if channel in r:
+            try:
+                data = channel.recv(1024)
+                if len(data) == 0:
+                    break
+                sock.send(data)
+            except ConnectionResetError:
+                break
+    
+    channel.close()
+    sock.close()
+
+
+def create_ssh_tunnel(transport: paramiko.Transport, remote_port: int, local_addr: str, local_port: int):
+    transport.request_port_forward(local_addr, remote_port)
+    channel = transport.accept(None)
+    handle_connection(channel, local_addr, local_port)
+
+
+def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
+    ssh_client = paramiko.SSHClient()
+    ssh_client.load_system_host_keys()
+    ssh_client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    try:
+        ssh_client.connect(
+            hostname=args.remote_host,
+            port=args.remote_port,
+            username=args.ssh_username,
+            password=args.ssh_password,
+            key_filename=args.ssh_privkey,
+            passphrase=args.ssh_passphrase
+        )
+    except paramiko.SSHException as ex:
         error(str(ex))
+
+    return ssh_client
+
+
+def capture_remote(args: argparse.Namespace):
+    global ssh_client
     
     tracee_options = get_effective_tracee_options(args)
 
     # prepare ssh tunnel to receive output
-    command = f'ssh -f -N -M -S {SSH_CTL_SOCK_DATA} -R {DATA_PORT}:localhost:{DATA_PORT} {ssh_opts}'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
-    if returncode != 0:
-        error(f'error setting up SSH tunnel:\n{err}')
+    ssh_data_client = ssh_connect(args)
+    ssh_data_forwarder = Thread(
+        target=create_ssh_tunnel,
+        args=(ssh_data_client.get_transport(), DATA_PORT, '127.0.0.1', DATA_PORT),
+        daemon=True
+    )
+    ssh_data_forwarder.start()
     
     # prepare ssh tunnel for control
-    command = f'ssh -f -N -M -S {SSH_CTL_SOCK_CTRL} -R {CTRL_PORT}:localhost:{CTRL_PORT} {ssh_opts}'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
-    if returncode != 0:
-        error(f'error setting up SSH tunnel:\n{err}')
-    
+    ssh_ctrl_client = ssh_connect(args)
+    ssh_ctrl_forwarder = Thread(
+        target=create_ssh_tunnel,
+        args=(ssh_ctrl_client.get_transport(), CTRL_PORT, '127.0.0.1', CTRL_PORT),
+        daemon=True
+    )
+    ssh_ctrl_forwarder.start()
+
     # copy remote capture script
+    ssh_client = ssh_connect(args)
+    sftp_client = ssh_client.open_sftp()
     remote_capture_script = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'remote-capture.py')
-    command = f'scp {ssh_opts.options} {remote_capture_script} {ssh_opts.server}:{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
-    if returncode != 0:
-        error(f'error copying capture script:\n{err}')
-    
-    command = f'ssh {ssh_opts} "chmod +x {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}"'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
+    sftp_client.put(remote_capture_script, REMOTE_CAPTURE_SCRIPT_REMOTE_PATH)
+    _, err, returncode = send_ssh_command(ssh_client, f'chmod +x {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}')
     if returncode != 0:
         error(f'error setting remote capture script as executable:\n{err}')
     
@@ -795,17 +746,11 @@ def capture_remote(args: argparse.Namespace):
         'container_image': args.container_image,
         'tracee_options': tracee_options
     }
-
     with open(REMOTE_CAPTURE_CONFIG_LOCAL_PATH, 'w') as f:
         f.write(json.dumps(config))
-    
-    command = f'scp {ssh_opts.options} {REMOTE_CAPTURE_CONFIG_LOCAL_PATH} {ssh_opts.server}:{REMOTE_CAPTURE_CONFIG_REMOTE_PATH}'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
-    if returncode != 0:
-        error(f'error copying capture config:\n{err}')
-    
+    sftp_client.put(REMOTE_CAPTURE_CONFIG_LOCAL_PATH, REMOTE_CAPTURE_CONFIG_REMOTE_PATH)
+
     # start reader thread
-    global reader_th
     reader_th = Thread(target=read_output, args=(args.fifo,))
     reader_th.start()
     
@@ -814,20 +759,12 @@ def capture_remote(args: argparse.Namespace):
     control_th.start()
     
     # run remote capture script (blocks until it exits)
-    command = f'ssh {ssh_opts} "{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH} {REMOTE_CAPTURE_CONFIG_REMOTE_PATH}"'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
+    _, err, returncode = send_ssh_command(ssh_client, f'{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH} {REMOTE_CAPTURE_CONFIG_REMOTE_PATH}')
     if returncode != 0:
         error(f'error running remote capture script:\n{err}')
     
-    # wait for the worker threads to exit
-    reader_th.join()
-    control_th.join()
-    
     # copy tracee logs file
-    command = f'scp {ssh_opts}:{REMOTE_CAPTURE_LOGFILE_REMOTE_PATH} {args.logfile}'
-    _, err, returncode = send_ssh_command(command, ssh_opts)
-    if returncode != 0:
-        error(f'error copying tracee logs:\n{err}')
+    sftp_client.get(REMOTE_CAPTURE_LOGFILE_REMOTE_PATH, args.logfile)
     
     cleanup()
 
@@ -895,7 +832,6 @@ def main():
     parser.add_argument('--ssh-password', type=str)
     parser.add_argument('--ssh-privkey', type=str)
     parser.add_argument('--ssh-passphrase', type=str)
-    parser.add_argument('--ssh-host', type=str)
     parser.add_argument('--custom-tracee-options', type=str)
     parser.add_argument('--container-scope', type=str)
     parser.add_argument('--comm', type=str)
@@ -935,4 +871,5 @@ def main():
 
 if __name__ == '__main__':
     #sys.stderr.write(f'{sys.argv}\n')
+    #sys.stderr = open('/tmp/traceeshark/capture_stderr.log', 'w')
     main()
