@@ -4,7 +4,6 @@ from typing import Dict, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
-import json
 import os
 import select
 import shutil
@@ -37,11 +36,7 @@ EXTCAP_VERSION = '0.1.2'
 DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
-CTRL_PORT = 4001
-REMOTE_CAPTURE_SCRIPT_REMOTE_PATH = '/tmp/remote-capture.py'
-REMOTE_CAPTURE_CONFIG_LOCAL_PATH = os.path.join(TMP_DIR, 'remote-config.json')
-REMOTE_CAPTURE_CONFIG_REMOTE_PATH = '/tmp/remote-config.json'
-REMOTE_CAPTURE_LOGFILE_REMOTE_PATH = '/tmp/tracee_logs.log'
+REMOTE_CAPTURE_LOGFILE = '/tmp/tracee_logs.log'
 READER_COMM = 'tracee-capture'
 
 GENERAL_GROUP = 'General'
@@ -56,10 +51,11 @@ DEFAULT_CONTAINER_NAME = 'tracee'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 
 
-container_id = None
-running = True
-local = True
-ssh_client: paramiko.SSHClient = None
+args: argparse.Namespace = None
+container_id: str = None
+running: bool = True
+local: bool = True
+stopping: bool = False
 
 
 def show_version():
@@ -403,20 +399,61 @@ def set_proc_name(newname: str):
     libc.prctl(15, byref(buff), 0, 0, 0)
 
 
-def stop_capture():
-    global running, container_id, local
+def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
+    ssh_client = paramiko.SSHClient()
+    ssh_client.load_system_host_keys()
+    ssh_client.set_missing_host_key_policy(paramiko.WarningPolicy())
 
+    try:
+        ssh_client.connect(
+            hostname=args.remote_host,
+            port=args.remote_port,
+            username=args.ssh_username,
+            password=args.ssh_password,
+            key_filename=args.ssh_privkey,
+            passphrase=args.ssh_passphrase
+        )
+    
+    except paramiko.SSHException as ex:
+        error(str(ex))
+    
+    # there is a bug where paramiko tries to interpret an RSA key as a DSS key,
+    # this only seems to happen when the key is invalid for this connection
+    except ValueError:
+        error('cannot authenticate using this private key')
+
+    return ssh_client
+
+
+def stop_capture(is_error: bool = False):
+    global running, container_id, local, args, stopping
+
+    if stopping:
+        return
+    
+    stopping = True
     running = False
 
-    if local:
-        if container_id is None:
-            cleanup()
-            sys.exit(0)
-
+    if container_id is not None:
+        ssh_client = None
+        if not local:
+            ssh_client = ssh_connect(args)
+        
         command = f'docker kill {container_id}'
-        _, err, returncode = send_command(command)
+        _, err, returncode = send_command(local, command, ssh_client)
         if returncode != 0:
-            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}')
+            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}\n')
+        
+        # an error occurred so we assume the main thread is not functioning, remove the container here
+        if is_error:
+            command = f'docker rm {container_id}'
+            _, err, returncode = send_command(local, command, ssh_client)
+            if returncode != 0:
+                error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}\n')
+
+            # set this so if the main thread is still functioning,
+            # it will not try to read the container's logs and remove it
+            container_id = None
 
 
 def read_output(extcap_pipe: str):
@@ -439,7 +476,7 @@ def read_output(extcap_pipe: str):
     # open tracee output socket and listen for an incoming connection
     tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    tracee_output_sock.bind(('', DATA_PORT))
+    tracee_output_sock.bind(('127.0.0.1', DATA_PORT))
     tracee_output_sock.listen(0)
     tracee_output_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, TRACEE_OUTPUT_BUF_CAPACITY)
     tracee_output_sock.settimeout(0.1)
@@ -483,13 +520,13 @@ def read_output(extcap_pipe: str):
         pass
 
 
-def send_command(command: str) -> Tuple[bytes, bytes, int]:
+def send_local_command(command: str) -> Tuple[str, str, int]:
     if WINDOWS:
         proc = subp.Popen(['cmd.exe', '/C', command], stdout=subp.PIPE, stderr=subp.PIPE)
     else:
         proc = subp.Popen(['/bin/sh', '-c', command], stdout=subp.PIPE, stderr=subp.PIPE)
     out, err = proc.communicate()
-    return out, err, proc.returncode
+    return out.decode(), err.decode(), proc.returncode
 
 
 def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str, int]:
@@ -501,129 +538,56 @@ def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str
     return ''.join(stdout_lines), ''.join(stderr_lines), stdout.channel.recv_exit_status()
 
 
-def cleanup():
-    global local, ssh_client
-
-    try:
-        os.remove(REMOTE_CAPTURE_CONFIG_LOCAL_PATH)
-    except FileNotFoundError:
-        pass
+def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = None) -> Tuple[str, str, int]:
+    if local:
+        return send_local_command(command)
     
-    if not local and ssh_client is not None:
-        # delete remote capture script
-        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}')
-
-        # delete remote tracee logs file
-        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_LOGFILE_REMOTE_PATH}')
+    if ssh_client is None:
+        raise ValueError()
+    
+    return send_ssh_command(ssh_client, command)
 
 
 def error(msg: str) -> NoReturn:
-    global running
-    running = False
-
     sys.stderr.write(f'{msg}\n')
-    cleanup()
-
-    sys.exit(1)
+    stop_capture(is_error=True)
+    raise RuntimeError()
 
 
 def exit_cb(_signum, _frame):
-    stop_capture()
+    stop_capture(is_error=False)
 
 
-def capture_local(args: argparse.Namespace):
-    global running
-
+def build_docker_run_command(args: argparse.Namespace, local: bool) -> str:
     tracee_options = get_effective_tracee_options(args)
 
-    # create file to get logs from tracee
-    if os.path.isdir(args.logfile):
-        os.rmdir(args.logfile)
-    open(args.logfile, 'w').close()
-
-    # start reader thread
-    reader_th = Thread(target=read_output, args=(args.fifo,))
-    reader_th.start()
-
     command = 'docker run -d'
+
+    # when not using docker for Windows or Mac, we connect tracee to the local network
+    if not local or (local and LINUX):
+        command += f' --network=host'
+        data_addr = '127.0.0.1'
+    # when using docker for Windows or Mac, we connect back to the built-in host dns
+    else:
+        data_addr = 'host.docker.internal'
 
     if len(args.container_name) > 0:
         command += f' --name {args.container_name}'
     
-    # host.docker.internal is default on docker for Windows and Mac
-    if LINUX:
-        command += f' --add-host host.docker.internal:host-gateway'
-    
-    command += f' {args.docker_options} -v {args.logfile}:/logs.log:rw {args.container_image} {tracee_options}'
+    logfile = args.logfile if local else REMOTE_CAPTURE_LOGFILE
+    command += f' {args.docker_options} -v {logfile}:/logs.log:rw {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
         command += f' --scope comm!=tracee'
-        
+
         # these exclusions are needed only when Wireshark is running on the same host that is being recorded
-        if LINUX:
+        if local and LINUX:
             command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
-    command += f' --output forward:tcp://host.docker.internal:{DATA_PORT} --log file:/logs.log'
+    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log'
 
-    out, err, returncode = send_command(command)
-    if returncode != 0:
-        error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
-    
-    global container_id
-    container_id = out.decode().rstrip('\n')
-
-    # wait until tracee exits (triggered by stop_capture or by an error)
-    command = f'docker wait {container_id}'
-    _, err, returncode = send_command(command)
-    if returncode != 0:
-        error(f'docker wait returned with error code {returncode}, stderr dump:\n{err}')
-    
-    running = False
-    
-    # check tracee logs for errors
-    command = f'docker logs {container_id}'
-    _, logs_err, returncode = send_command(command)
-    if returncode != 0:
-        error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
-    
-    # remove tracee container
-    command = f'docker rm {container_id}'
-    _, err, returncode = send_command(command)
-    if returncode != 0:
-        error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
-    
-    if len(logs_err) > 0:
-        error(f'Tracee exited with error message:\n{logs_err.decode()}')
-    
-    cleanup()
-
-
-def control_worker():
-    global running
-
-    ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ctrl_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    ctrl_sock.settimeout(0.1) # don't block on accept forever in case remote capture script fails
-    ctrl_sock.bind(('127.0.0.1', CTRL_PORT))
-    ctrl_sock.listen(0)
-    ctrl_conn = None
-
-    while running:
-        if ctrl_conn is None:
-            try:
-                ctrl_conn, _ = ctrl_sock.accept()
-            except socket.timeout:
-                continue
-        
-        sleep(0.1)
-    
-    # send termination signal to the remote capture
-    if ctrl_conn is not None:
-        ctrl_conn.send(b'stop')
-        ctrl_conn.close()
-    
-    ctrl_sock.close()
+    return command
 
 
 def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: int):
@@ -661,36 +625,19 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
     sock.close()
 
 
-def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
-    ssh_client = paramiko.SSHClient()
-    ssh_client.load_system_host_keys()
-    ssh_client.set_missing_host_key_policy(paramiko.WarningPolicy())
-
-    try:
-        ssh_client.connect(
-            hostname=args.remote_host,
-            port=args.remote_port,
-            username=args.ssh_username,
-            password=args.ssh_password,
-            key_filename=args.ssh_privkey,
-            passphrase=args.ssh_passphrase
-        )
-    
-    except paramiko.SSHException as ex:
-        error(str(ex))
-    
-    # there is a bug where paramiko tries to interpret an RSA key as a DSS key,
-    # this only seems to happen when the key is invalid for this connection
-    except ValueError:
-        error('cannot authenticate using this private key')
-
-    return ssh_client
+def prepare_local_capture(args: argparse.Namespace):
+    # create file to get logs from tracee
+    if os.path.isdir(args.logfile):
+        os.rmdir(args.logfile)
+    open(args.logfile, 'w').close()
 
 
-def capture_remote(args: argparse.Namespace):
-    global ssh_client
-    
-    tracee_options = get_effective_tracee_options(args)
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient):
+    # create empty tracee logs file to be mounted into the tracee container
+    # (this is necessary because if it doesn't exist, docker will assume it needs to be a directory)
+    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
+    if returncode != 0:
+        error(f'error creating file for tracee logs, stderr dump:\n{err}')
 
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
@@ -720,63 +667,10 @@ def capture_remote(args: argparse.Namespace):
         daemon=True
     )
     ssh_data_forwarder.start()
-    
-    # prepare ssh tunnel for control
-    ssh_ctrl_client = ssh_connect(args)
-    try:
-        ssh_ctrl_client.get_transport().request_port_forward('127.0.0.1', CTRL_PORT)
-    except paramiko.SSHException as ex:
-        error(str(ex))
-    ssh_ctrl_forwarder = Thread(
-        target=handle_connection,
-        args=(ssh_ctrl_client.get_transport(), '127.0.0.1', CTRL_PORT),
-        daemon=True
-    )
-    ssh_ctrl_forwarder.start()
-
-    # copy remote capture script
-    ssh_client = ssh_connect(args)
-    sftp_client = ssh_client.open_sftp()
-    remote_capture_script = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'remote-capture.py')
-    sftp_client.put(remote_capture_script, REMOTE_CAPTURE_SCRIPT_REMOTE_PATH)
-    _, err, returncode = send_ssh_command(ssh_client, f'chmod +x {REMOTE_CAPTURE_SCRIPT_REMOTE_PATH}')
-    if returncode != 0:
-        error(f'error setting remote capture script as executable:\n{err}')
-    
-    # create configuration and copy it
-    config = {
-        'data_port': DATA_PORT,
-        'ctrl_port': CTRL_PORT,
-        'container_name': args.container_name,
-        'docker_options': args.docker_options,
-        'container_image': args.container_image,
-        'tracee_options': tracee_options
-    }
-    with open(REMOTE_CAPTURE_CONFIG_LOCAL_PATH, 'w') as f:
-        f.write(json.dumps(config))
-    sftp_client.put(REMOTE_CAPTURE_CONFIG_LOCAL_PATH, REMOTE_CAPTURE_CONFIG_REMOTE_PATH)
-
-    # start reader thread
-    reader_th = Thread(target=read_output, args=(args.fifo,))
-    reader_th.start()
-    
-    # start control worker
-    control_th = Thread(target=control_worker)
-    control_th.start()
-    
-    # run remote capture script (blocks until it exits)
-    _, err, returncode = send_ssh_command(ssh_client, f'{REMOTE_CAPTURE_SCRIPT_REMOTE_PATH} {REMOTE_CAPTURE_CONFIG_REMOTE_PATH}')
-    if returncode != 0:
-        error(f'error running remote capture script:\n{err}')
-    
-    # copy tracee logs file
-    sftp_client.get(REMOTE_CAPTURE_LOGFILE_REMOTE_PATH, args.logfile)
-    
-    cleanup()
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local
+    global local, running, container_id
 
     if args.capture_type == 'local':
         local = True
@@ -791,14 +685,62 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
-    # catch termination signals from wireshark
+    # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
+    # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
     signal.signal(signal.SIGTERM, exit_cb)
 
     if local:
-        capture_local(args)
+        ssh_client = None
+        prepare_local_capture(args)
     else:
-        capture_remote(args)
+        ssh_client = ssh_connect(args)
+        prepare_remote_capture(args, ssh_client)
+
+    # start reader thread
+    reader_th = Thread(target=read_output, args=(args.fifo,))
+    reader_th.start()
+
+    # run tracee container
+    command = build_docker_run_command(args, local)
+    out, err, returncode = send_command(local, command, ssh_client)
+    if returncode != 0:
+        error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
+    container_id = out.rstrip('\n')
+
+    # wait until tracee exits (triggered by stop_capture or by an error)
+    command = f'docker wait {container_id}'
+    _, err, returncode = send_command(local, command, ssh_client)
+    if returncode != 0:
+        error(f'docker wait returned with error code {returncode}, stderr dump:\n{err}')
+    
+    running = False
+
+    # copy tracee logs file
+    if not local:
+        sftp_client = ssh_client.open_sftp()
+        sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
+        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_LOGFILE}')
+    
+    # the capture has been stopped because of an error condition,
+    # so the stop_capture function already removed the container
+    if container_id is None:
+        return
+    
+    # check tracee logs for errors
+    command = f'docker logs {container_id}'
+    _, logs_err, returncode = send_command(local, command, ssh_client)
+    if returncode != 0:
+        error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # remove tracee container
+    command = f'docker rm {container_id}'
+    _, err, returncode = send_command(local, command, ssh_client)
+    if returncode != 0:
+        error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
+    
+    if len(logs_err) > 0:
+        error(f'Tracee exited with error message:\n{logs_err.decode()}')
 
 
 def handle_reload(option: str, args: argparse.Namespace):
@@ -814,6 +756,8 @@ def handle_reload(option: str, args: argparse.Namespace):
 
 
 def main():
+    global args
+
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Capture events and packets using Tracee')
 
     # extcap arguments
@@ -878,4 +822,13 @@ def main():
 if __name__ == '__main__':
     #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
-    main()
+    try:
+        main()
+    # RuntimeError is raised by the error() function which already printed
+    # an error message, don't raise it so the error screen is not cluttered
+    except RuntimeError:
+        stop_capture(is_error=True)
+    # any other exception needs to be raised
+    except Exception:
+        stop_capture(is_error=True)
+        raise
