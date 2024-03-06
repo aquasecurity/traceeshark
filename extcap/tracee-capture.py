@@ -633,12 +633,6 @@ def prepare_local_capture(args: argparse.Namespace):
 
 
 def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient):
-    # create empty tracee logs file to be mounted into the tracee container
-    # (this is necessary because if it doesn't exist, docker will assume it needs to be a directory)
-    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
-    if returncode != 0:
-        error(f'error creating file for tracee logs, stderr dump:\n{err}')
-
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
 
@@ -667,6 +661,12 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         daemon=True
     )
     ssh_data_forwarder.start()
+
+    # create empty tracee logs file to be mounted into the tracee container
+    # (this is necessary because if it doesn't exist, docker will assume it needs to be a directory)
+    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
+    if returncode != 0:
+        error(f'error creating file for tracee logs, stderr dump:\n{err}')
 
 
 def tracee_capture(args: argparse.Namespace):
