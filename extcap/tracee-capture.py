@@ -32,7 +32,7 @@ else:
     os.makedirs(TMP_DIR, exist_ok=True)
 
 
-EXTCAP_VERSION = '0.1.2'
+EXTCAP_VERSION = '0.2.0'
 DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000

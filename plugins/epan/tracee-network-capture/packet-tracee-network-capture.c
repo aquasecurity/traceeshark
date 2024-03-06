@@ -9,7 +9,7 @@
 #include <ws_version.h>
 
 #ifndef PLUGIN_VERSION
-#define PLUGIN_VERSION "0.1.2"
+#define PLUGIN_VERSION "0.2.0"
 #endif
 
 #ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API

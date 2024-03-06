@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.0
+
+Added:
+
+- Remote live capturing
+
+- Local live capturing on Windows and Mac using docker desktop's VM
+
+Fixed:
+
+- Makefile and install script bug on Mac
+
 ## v0.1.2
 
 Added:
