@@ -54,8 +54,6 @@ When using for the first time, the Tracee configuration profile needs to be appl
 
 ### Live capture
 
-Currently live capture can only be done locally, which means only Linux is supported.
-
 Tracee live capture is implemented as an external capture program ("extcap" in Wireshark terminology). It is listed as "Tracee: capture" together with regular network interfaces on the main screen. It has a settings icon next to it which allows managing Tracee's options before starting the capture.
 
 #### Preset system
