@@ -41,3 +41,5 @@ Copy-Item "tracee-json.dll" "$wsPersonalDir\plugins\$wsShortVersion\wiretap" -Fo
 
 New-Item -Path "$wsPersonalDir\profiles" -ItemType Directory -Force | Out-Null
 Copy-Item -Path "profiles\Tracee" -Destination "$wsPersonalDir\profiles" -Recurse -Force
+
+Copy-Item -Path "extcap" -Destination "$wsPersonalDir" -Recurse -Force

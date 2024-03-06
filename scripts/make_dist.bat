@@ -6,6 +6,7 @@ copy /Y build\run\RelWithDebInfo\tracee-event dist\workdir\tracee-event.dll
 copy /Y build\run\RelWithDebInfo\tracee-network-capture dist\workdir\tracee-network-capture.dll
 copy /Y build\run\RelWithDebInfo\tracee-json dist\workdir\tracee-json.dll
 xcopy /Y /E /I profiles dist\workdir\profiles
+xcopy /Y /E /I extcap dist\workdir\extcap
 
 for /f "tokens=2" %%a in ('build\run\RelWithDebInfo\wireshark.exe --version ^| find "Wireshark "') do (
     for /f "tokens=1,2,3 delims=." %%A in ("%%a") do (

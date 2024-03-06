@@ -26,16 +26,6 @@ if [ "$OS_NAME" == "Linux" ]; then
     cp tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan
     mkdir -p ~/.local/lib/wireshark/plugins/wiretap
     cp tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap
-
-    mkdir -p ~/.local/lib/wireshark/extcap
-    cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap/
-    chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
-    cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap/
-
-    mkdir -p ~/.config/wireshark/extcap
-    cp extcap/tracee-capture.py ~/.config/wireshark/extcap/
-    chmod +x ~/.config/wireshark/extcap/tracee-capture.py
-    cp -r extcap/tracee-capture ~/.config/wireshark/extcap/
 else
     WS_VERSION_SHORT=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
     WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
@@ -45,3 +35,13 @@ else
     mkdir -p ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/wiretap
     cp tracee-json.so* ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/wiretap
 fi
+
+mkdir -p ~/.local/lib/wireshark/extcap
+cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap/
+chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
+cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap/
+
+mkdir -p ~/.config/wireshark/extcap
+cp extcap/tracee-capture.py ~/.config/wireshark/extcap/
+chmod +x ~/.config/wireshark/extcap/tracee-capture.py
+cp -r extcap/tracee-capture ~/.config/wireshark/extcap/
