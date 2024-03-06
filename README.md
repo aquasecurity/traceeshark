@@ -28,7 +28,23 @@ chmod +x install.sh
 
 Now the plugins should be available using your installed Wireshark.
 
-:warning: NOTE: installation is per user and root may be required for using local live capture, so run the install script on any user you will be using Traceeshark with. As an additional note, currently personal plugins will not be loaded if Wireshark is started as root, so there are 2 options for using local live capture: either add your user to the docker group so root privileges are not required, or copy the plugins to the global plugins folder (in Wireshark, see `Help -> About Wireshark -> Folders`).
+### Setup for live capture
+
+To use live capture, the `paramiko` and `msgpack` python libraries must be installed:
+
+```
+pip3 install paramiko msgpack
+```
+
+Additionally, for capturing locally, the user must be able to run docker (capturing using root is not possible because the plugins aren't loaded when running as root).
+
+On Linux, add your user to the docker group:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+On Windows and Mac, make sure docker desktop is installed and your user can run containers.
 
 ## Basic usage
 
