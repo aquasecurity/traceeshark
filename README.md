@@ -36,7 +36,9 @@ To use live capture, the `paramiko` and `msgpack` python libraries must be insta
 pip3 install paramiko msgpack
 ```
 
-Additionally, for capturing locally, the user must be able to run docker (capturing using root is not possible because the plugins aren't loaded when running as root).
+Additionally, the user must be able to run docker containers.
+
+:information_source: This requirement is also applicable to remote servers you want to capture on, make sure the user you log in with can run docker.
 
 On Linux, add your user to the docker group:
 
