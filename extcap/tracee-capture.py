@@ -496,7 +496,7 @@ def read_output(extcap_pipe: str):
             # read data and feed it to the unpacker
             data = tracee_output_conn.recv(TRACEE_OUTPUT_BUF_CAPACITY)
             unpacker.feed(data)
-        except TimeoutError:
+        except socket.timeout:
             continue
         except BrokenPipeError:
             break
