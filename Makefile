@@ -123,9 +123,9 @@ dist: all
 	fi
 	
 	@cp -r profiles dist/workdir
-	@if [ $(OS_NAME) = "Linux" ]; then\
-		cp -r extcap dist/workdir; \
-	fi
+	@cp -r extcap dist/workdir
+
 	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))
 	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
+	
 	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
