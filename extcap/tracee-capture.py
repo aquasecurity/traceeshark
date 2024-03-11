@@ -558,7 +558,7 @@ def exit_cb(_signum, _frame):
     stop_capture(is_error=False)
 
 
-def build_docker_run_command(args: argparse.Namespace, local: bool) -> str:
+def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Optional[int] = None) -> str:
     tracee_options = get_effective_tracee_options(args)
 
     command = 'docker run -d'
@@ -578,6 +578,9 @@ def build_docker_run_command(args: argparse.Namespace, local: bool) -> str:
     command += f' {args.docker_options} -v {logfile}:/logs.log:rw {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
+    if sshd_pid is not None:
+        command += f' --scope pid!={sshd_pid}'
+    
     if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
         command += f' --scope comm!=tracee'
 
@@ -632,7 +635,7 @@ def prepare_local_capture(args: argparse.Namespace):
     open(args.logfile, 'w').close()
 
 
-def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient):
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient) -> int:
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
 
@@ -667,7 +670,14 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
     if returncode != 0:
         error(f'error creating file for tracee logs, stderr dump:\n{err}')
-
+    
+    # get pid of sshd responsible for the ssh tunnel (it constantly polls its sockets which may spam the capture)
+    out, err, returncode = send_ssh_command(ssh_data_client, "echo $PPID")
+    if returncode != 0:
+        error(f'error getting sshd pid, stderr dump:\n{err}')
+    
+    return int(out)
+    
 
 def tracee_capture(args: argparse.Namespace):
     global local, running, container_id
@@ -695,14 +705,14 @@ def tracee_capture(args: argparse.Namespace):
         prepare_local_capture(args)
     else:
         ssh_client = ssh_connect(args)
-        prepare_remote_capture(args, ssh_client)
+        sshd_pid = prepare_remote_capture(args, ssh_client)
 
     # start reader thread
     reader_th = Thread(target=read_output, args=(args.fifo,))
     reader_th.start()
 
     # run tracee container
-    command = build_docker_run_command(args, local)
+    command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
     out, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
         error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
