@@ -702,6 +702,7 @@ def tracee_capture(args: argparse.Namespace):
 
     if local:
         ssh_client = None
+        sshd_pid = None
         prepare_local_capture(args)
     else:
         ssh_client = ssh_connect(args)
