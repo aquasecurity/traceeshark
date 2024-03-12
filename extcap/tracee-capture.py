@@ -441,14 +441,14 @@ def stop_capture(is_error: bool = False):
         
         command = f'docker kill {container_id}'
         _, err, returncode = send_command(local, command, ssh_client)
-        if returncode != 0:
+        if returncode != 0 and 'No such container' not in err:
             error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}\n')
         
         # an error occurred so we assume the main thread is not functioning, remove the container here
         if is_error:
             command = f'docker rm {container_id}'
             _, err, returncode = send_command(local, command, ssh_client)
-            if returncode != 0:
+            if returncode != 0 and 'No such container' not in err:
                 error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}\n')
 
             # set this so if the main thread is still functioning,
@@ -751,7 +751,7 @@ def tracee_capture(args: argparse.Namespace):
         error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
     
     if len(logs_err) > 0:
-        error(f'Tracee exited with error message:\n{logs_err.decode()}')
+        error(f'Tracee exited with error message:\n{logs_err}')
 
 
 def handle_reload(option: str, args: argparse.Namespace):
