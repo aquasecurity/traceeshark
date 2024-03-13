@@ -18,30 +18,37 @@ fi
 
 mkdir -p ~/.config/wireshark/profiles
 cp -r profiles/Tracee ~/.config/wireshark/profiles/
+echo "[*] Installed profile to ~/.config/wireshark/profiles/Tracee"
 
-OS_NAME=$(uname -s)
-if [ "$OS_NAME" == "Linux" ]; then
-    mkdir -p ~/.local/lib/wireshark/plugins/epan
-    cp tracee-event.so* ~/.local/lib/wireshark/plugins/epan
-    cp tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan
-    mkdir -p ~/.local/lib/wireshark/plugins/wiretap
-    cp tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap
+#WS_VERSION_SHORT=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
+WS_VERSION_SHORT=$(echo $WS_VERSION_EXISTS | grep -o -E "[0-9]+\.[0-9]+")
+if [[ $WS_VERSION_SHORT < "4.3" ]]; then
+    OS_NAME=$(uname -s)
+    if [ "$OS_NAME" == "Linux" ]; then
+        WS_VERSION_DIR=$WS_VERSION_SHORT
+    else
+        WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
+    fi
+    PLUGINS_DIR="~/.local/lib/wireshark/plugins/$WS_VERSION_DIR"
 else
-    WS_VERSION_SHORT=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
-    WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
-    mkdir -p ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/epan
-    cp tracee-event.so* ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/epan
-    cp tracee-network-capture.so* ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/epan
-    mkdir -p ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/wiretap
-    cp tracee-json.so* ~/.local/lib/wireshark/plugins/$WS_VERSION_DIR/wiretap
+    PLUGINS_DIR="~/.local/lib/wireshark/plugins"
 fi
 
-mkdir -p ~/.local/lib/wireshark/extcap
-cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap/
-chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
-cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap/
+mkdir -p $PLUGINS_DIR/epan
+cp tracee-event.so* $PLUGINS_DIR/epan
+cp tracee-network-capture.so* $PLUGINS_DIR/epan
+mkdir -p $PLUGINS_DIR/wiretap
+cp tracee-json.so* $PLUGINS_DIR/wiretap
+echo "[*] Installed plugins to $PLUGINS_DIR"
 
-mkdir -p ~/.config/wireshark/extcap
-cp extcap/tracee-capture.py ~/.config/wireshark/extcap/
-chmod +x ~/.config/wireshark/extcap/tracee-capture.py
-cp -r extcap/tracee-capture ~/.config/wireshark/extcap/
+if [[ $WS_VERSION_SHORT < "4.1" ]]; then
+    EXTCAP_DIR="~/.config/wireshark/extcap"
+else
+    EXTCAP_DIR="~/.local/lib/wireshark/extcap"
+fi
+
+mkdir -p $EXTCAP_DIR
+cp extcap/tracee-capture.py $EXTCAP_DIR
+chmod +x $EXTCAP_DIR/tracee-capture.py
+cp -r extcap/tracee-capture $EXTCAP_DIR
+echo "[*] Installed extcap to $EXTCAP_DIR"
