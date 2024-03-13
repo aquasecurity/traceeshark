@@ -74,4 +74,4 @@ Copy-Item "tracee-json.dll" "$wsPluginsDir\wiretap" -Force
 Write-Output "[*] Installed plugins to $wsPluginsDir"
 
 Copy-Item -Path "extcap" -Destination "$wsPersonalDir" -Recurse -Force
-Write-Output "[*] Install extcap to $wsPersonalDir\extcap"
+Write-Output "[*] Installed extcap to $wsPersonalDir\extcap"
