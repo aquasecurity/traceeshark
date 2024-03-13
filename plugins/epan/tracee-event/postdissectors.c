@@ -46,7 +46,7 @@ static int dissect_net_packet_http_request(tvbuff_t *tvb _U_, packet_info *pinfo
     col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s %s", method, uri_path, protocol);
     
     if (strcmp(method, "POST") && ((content_type = wanted_field_get_str("http.content_type")) != NULL))
-        col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", content_type);
+        col_append_fstr(pinfo->cinfo, COL_INFO, "  (%s)", content_type);
 
     return 0;
 }
@@ -100,7 +100,7 @@ static int dissect_net_packet_http(tvbuff_t *tvb _U_, packet_info *pinfo, proto_
         col_add_fstr(pinfo->cinfo, COL_INFO, "%s %s", protocol, status);
 
         if (content_type_short != NULL)
-            col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", content_type_short);
+            col_append_fstr(pinfo->cinfo, COL_INFO, "  (%s)", content_type_short);
     }
 
     return 0;
