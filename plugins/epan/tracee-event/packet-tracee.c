@@ -14,10 +14,6 @@
 #include <wsutil/wslog.h>
 #include <ws_version.h>
 
-#ifndef PLUGIN_VERSION
-#define PLUGIN_VERSION "0.2.0"
-#endif
-
 #ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
 WS_DLL_PUBLIC_DEF const char plugin_version[] = PLUGIN_VERSION;
 WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;

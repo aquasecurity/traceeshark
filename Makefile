@@ -1,3 +1,6 @@
+include .env
+export
+
 OS_NAME := $(shell uname -s)
 
 # update wireshark source tree and build
@@ -44,11 +47,13 @@ install:
 	
 	@mkdir -p ~/.local/lib/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
+	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
 
 	@mkdir -p ~/.config/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
+	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py
 	@chmod +x ~/.config/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
 
@@ -94,9 +99,9 @@ debug: all install
 cmake: copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
 ifneq ($(USE_QT5),y)
-	@cmake -G Ninja -DENABLE_CCACHE=Yes -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -S wireshark -B wireshark/build
 else
-	@cmake -G Ninja -DENABLE_CCACHE=Yes -DUSE_qt6=OFF -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DUSE_qt6=OFF -S wireshark -B wireshark/build
 endif
 
 dist: all
@@ -124,8 +129,9 @@ dist: all
 	
 	@cp -r profiles dist/workdir
 	@cp -r extcap dist/workdir
+	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' dist/workdir/extcap/tracee-capture.py
 
 	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))
 	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
 	
-	@cd dist/workdir && zip -r ../traceeshark-$(shell git describe --tags --abbrev=0)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+	@cd dist/workdir && zip -r ../traceeshark-v$(TRACEESHARK_VERSION)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .

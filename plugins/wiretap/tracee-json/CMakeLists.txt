@@ -10,7 +10,7 @@
 cmake_minimum_required(VERSION 3.12)
 cmake_policy(SET CMP0048 NEW)
 
-project(Traceeshark VERSION 0.2.0 DESCRIPTION "Tracee Wireshark plugins" LANGUAGES C)
+project(Traceeshark VERSION ${TRACEESHARK_VERSION} DESCRIPTION "Tracee Wireshark plugins" LANGUAGES C)
 
 find_package(Wireshark CONFIG REQUIRED)
 
@@ -34,7 +34,7 @@ if(CMAKE_COMPILER_IS_GNUCC)
 endif()
 
 add_compile_definitions(
-	VERSION=\"${PROJECT_VERSION}\"
+	PLUGIN_VERSION=\"${PROJECT_VERSION}\"
 	$<$<BOOL:${HAVE_SSIZE_T}>:HAVE_SSIZE_T>
 )
 

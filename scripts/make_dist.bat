@@ -1,3 +1,7 @@
+setlocal
+
+FOR /F "tokens=*" %%i in ('type .env') do SET %%i
+
 rmdir /S /Q dist\workdir
 mkdir dist\workdir
 
@@ -7,6 +11,7 @@ copy /Y build\run\RelWithDebInfo\tracee-network-capture dist\workdir\tracee-netw
 copy /Y build\run\RelWithDebInfo\tracee-json dist\workdir\tracee-json.dll
 xcopy /Y /E /I profiles dist\workdir\profiles
 xcopy /Y /E /I extcap dist\workdir\extcap
+powershell -Command "(gc dist\workdir\extcap\tracee-capture.py) -replace 'VERSION_PLACEHOLDER', '%TRACEESHARK_VERSION%' | Out-File -encoding ASCII dist\workdir\extcap\tracee-capture.py"
 
 for /f "tokens=2" %%a in ('build\run\RelWithDebInfo\wireshark.exe --version ^| find "Wireshark "') do (
     for /f "tokens=1,2,3 delims=." %%A in ("%%a") do (
@@ -15,6 +20,6 @@ for /f "tokens=2" %%a in ('build\run\RelWithDebInfo\wireshark.exe --version ^| f
 )
 echo %WS_VERSION% > dist\workdir\ws_version.txt
 
-for /f "tokens=*" %%a in ('"git describe --tags --abbrev=0"') do set TRACEESHARK_VERSION=%%a
+powershell Compress-Archive -Update -Path dist\workdir\* -DestinationPath dist\traceeshark-v%TRACEESHARK_VERSION%-wireshark-%WS_VERSION%-windows-x86_64.zip
 
-powershell Compress-Archive -Update -Path dist\workdir\* -DestinationPath dist\traceeshark-%TRACEESHARK_VERSION%-wireshark-%WS_VERSION%-windows-x86_64.zip
+endlocal

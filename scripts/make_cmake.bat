@@ -1,3 +1,7 @@
+setlocal
+
+FOR /F "tokens=*" %%i in ('type .env') do SET %%i
+
 rmdir /S /Q wireshark\plugins\epan\tracee-event
 rmdir /S /Q wireshark\plugins\epan\tracee-network-capture
 rmdir /S /Q wireshark\plugins\wiretap\tracee-json
@@ -11,5 +15,7 @@ copy /Y CMakeListsCustom.txt wireshark
 rmdir /S /Q build
 mkdir build
 pushd build
-cmake -G "Visual Studio 17 2022" -A x64 -DENABLE_CCACHE=Yes ..\wireshark
+cmake -G "Visual Studio 17 2022" -A x64 -DTRACEESHARK_VERSION=%TRACEESHARK_VERSION% -DENABLE_CCACHE=Yes ..\wireshark
 popd
+
+endlocal
