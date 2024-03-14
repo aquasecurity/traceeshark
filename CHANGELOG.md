@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.1
+
+Changed:
+
+- Exclude SSH tunnel PID in remote capture
+- Traceeshark version is specified once for building in the `.env` file
+
+Fixed:
+
+- extcap bugfixes
+
+- Install scripts now determine the correct installation folders based on the Wireshark version
+
 ## v0.2.0
 
 Added:
