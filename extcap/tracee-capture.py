@@ -9,6 +9,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess as subp
 import sys
@@ -37,6 +38,8 @@ DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
 REMOTE_CAPTURE_LOGFILE = '/tmp/tracee_logs.log'
+REMOTE_CAPTURE_OUTPUT_DIR = '/tmp/tracee_output'
+REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
 
 GENERAL_GROUP = 'General'
@@ -49,6 +52,8 @@ DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
 DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
+DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
+DEFAULT_SNAPLEN = 'default'
 
 
 args: argparse.Namespace = None
@@ -151,6 +156,32 @@ def get_effective_tracee_options(args: argparse.Namespace) -> str:
     if args.event_sets is not None:
         options += f' --events {args.event_sets}'
     
+    # add artifacts to capture
+    network = False
+    network_captures = []
+
+    if args.capture_artifacts is not None:
+        for artifact in args.capture_artifacts.split(','):
+            if 'network' not in artifact:
+                options += f' --capture {artifact}'
+            else:
+                if not network:
+                    options += f' --capture network'
+                    network = True
+                if artifact == 'network-single':
+                    network_captures.append('single')
+                elif artifact == 'network-per-process':
+                    network_captures.append('process')
+                elif artifact == 'network-per-command':
+                    network_captures.append('command')
+                elif artifact == 'network-per-container':
+                    network_captures.append('container')
+                
+        if network:
+            options += f' --capture pcap:{",".join(network_captures)} --capture pcap-snaplen:{args.network_snaplen}'
+            if args.network_filtered:
+                options += ' --capture pcap-options:filtered'
+    
     return options
 
 
@@ -175,6 +206,10 @@ def show_config(reload_option: Optional[str]):
         ),
         ConfigArg(call='--logfile', display='Tracee logs file', type='fileselect',
             default=DEFAULT_LOGFILE,
+            group=GENERAL_GROUP
+        ),
+        ConfigArg(call='--output-dir', display='Tracee output folder', type='string',
+            default=DEFAULT_OUTPUT_DIR,
             group=GENERAL_GROUP
         ),
         ConfigArg(call='--container-image', display='Docker image', type='string',
@@ -235,6 +270,20 @@ def show_config(reload_option: Optional[str]):
             tooltip='Sets of events to trace',
             group=TRACEE_OPTIONS_GROUP
         ),
+        ConfigArg(call='--capture-artifacts', display='Capture artifacts', type='multicheck',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--network-filtered', display='Filter network capture', type='boolflag',
+            tooltip='Capture packets according to the events being traced',
+            default='false',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--network-snaplen', display='Packet snaplen', type='string',
+            validation='^(default|headers|max|\d+(b|kb))$',
+            default=DEFAULT_SNAPLEN,
+            tooltip='Length of captured packets. See the "Forensics" section of Tracee\'s documentation for details',
+            group=TRACEE_OPTIONS_GROUP
+        ),
         ConfigArg(call='--preset', display='Preset', type='selector',
             tooltip='Tracee options preset',
             group=PRESET_GROUP,
@@ -261,6 +310,7 @@ def show_config(reload_option: Optional[str]):
     id_container_scope = ConfigArg.id_from_call('--container-scope')
     id_process_scope = ConfigArg.id_from_call('--process-scope')
     id_event_sets = ConfigArg.id_from_call('--event-sets')
+    id_capture = ConfigArg.id_from_call('--capture-artifacts')
     id_preset = ConfigArg.id_from_call('--preset')
     id_preset_from_file = ConfigArg.id_from_call('--preset-from-file')
     id_delete_preset = ConfigArg.id_from_call('--delete-preset')
@@ -319,7 +369,16 @@ def show_config(reload_option: Optional[str]):
         ConfigVal(arg=id_event_sets, value='system_keys', display='system_keys', enabled='true', parent='system'),
         ConfigVal(arg=id_event_sets, value='container', display='container', enabled='true'),
         ConfigVal(arg=id_event_sets, value='derived', display='derived', enabled='true'),
-        ConfigVal(arg=id_event_sets, value='security_alert', display='security_alert', enabled='true')
+        ConfigVal(arg=id_event_sets, value='security_alert', display='security_alert', enabled='true'),
+        ConfigVal(arg=id_capture, value='exec', display='Executable files', enabled='true'),
+        ConfigVal(arg=id_capture, value='module', display='Kernel modules', enabled='true'),
+        ConfigVal(arg=id_capture, value='bpf', display='eBPF programs', enabled='true'),
+        ConfigVal(arg=id_capture, value='mem', display='Memory regions (mem_prot_alert)', enabled='true'),
+        ConfigVal(arg=id_capture, value='network', display='Network packets', enabled='false'),
+        ConfigVal(arg=id_capture, value='network-single', display='Single pcap', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-process', display='Per process', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-command', display='Per command', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-container', display='Per container', enabled='true', parent='network')
     ]
 
     if reload_option is None or reload_option == 'preset':
@@ -439,10 +498,10 @@ def stop_capture(is_error: bool = False):
         if not local:
             ssh_client = ssh_connect(args)
         
-        command = f'docker kill {container_id}'
+        command = f'docker stop {container_id}'
         _, err, returncode = send_command(local, command, ssh_client)
-        if returncode != 0 and 'No such container' not in err:
-            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}\n')
+        if returncode != 0 and 'No such container' not in err and 'is not running' not in err:
+            error(f'docker stop returned with error code {returncode}, stderr dump:\n{err}\n')
         
         # an error occurred so we assume the main thread is not functioning, remove the container here
         if is_error:
@@ -548,6 +607,16 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
     return send_ssh_command(ssh_client, command)
 
 
+def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
+    os.makedirs(local_dir, exist_ok=False)
+
+    for filename in sftp_client.listdir(remote_dir):
+        if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
+            copy_dir_from_remote(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+        else:
+            sftp_client.get(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+
+
 def error(msg: str) -> NoReturn:
     sys.stderr.write(f'{msg}\n')
     stop_capture(is_error=True)
@@ -575,7 +644,9 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         command += f' --name {args.container_name}'
     
     logfile = args.logfile if local else REMOTE_CAPTURE_LOGFILE
-    command += f' {args.docker_options} -v {logfile}:/logs.log:rw {args.container_image} {tracee_options}'
+    output_dir = args.output_dir if local else REMOTE_CAPTURE_OUTPUT_DIR
+    new_entrypoint = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh') if local else REMOTE_CAPTURE_NEW_ENTRYPOINT
+    command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if sshd_pid is not None:
@@ -588,7 +659,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         if local and LINUX:
             command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
-    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log'
+    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log --capture dir:/output --capture clear-dir --capabilities add=cap_dac_override'
 
     return command
 
@@ -629,13 +700,33 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
 
 
 def prepare_local_capture(args: argparse.Namespace):
-    # create file to get logs from tracee
+    # create empty file to get logs from tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
     open(args.logfile, 'w').close()
 
+    # create directory for tracee output files
+    if os.path.isdir(args.output_dir):
+        shutil.rmtree(args.output_dir)
+    elif os.path.isfile(args.output_dir):
+        os.remove(args.output_dir)
+    os.makedirs(args.output_dir)
+    os.chmod(args.output_dir, 0o2775) # g+ws
 
-def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient) -> int:
+
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp_client: paramiko.SFTPClient) -> int:
+    # remove preexisting tracee logs file
+    if os.path.isdir(args.logfile):
+        shutil.rmtree(args.logfile)
+    elif os.path.isfile(args.logfile):
+        os.remove(args.logfile)
+    
+    # remove preexisting tracee output directory
+    if os.path.isdir(args.output_dir):
+        shutil.rmtree(args.output_dir)
+    elif os.path.isfile(args.output_dir):
+        os.remove(args.output_dir)
+    
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
 
@@ -674,13 +765,24 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     if returncode != 0:
         error(f'error creating file for tracee logs, stderr dump:\n{err}')
     
+    # create directory for tracee output files
+    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_OUTPUT_DIR} && mkdir {REMOTE_CAPTURE_OUTPUT_DIR} && chmod g+ws {REMOTE_CAPTURE_OUTPUT_DIR}')
+    if returncode != 0:
+        error(f'error creating output directory for tracee, stderr dump:\n{err}')
+    
+    # copy new container entrypoint
+    sftp_client.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
+    if returncode != 0:
+        error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
+    
     # get pid of sshd responsible for the ssh tunnel (it constantly polls its sockets which may spam the capture)
     out, err, returncode = send_ssh_command(ssh_data_client, "echo $PPID")
     if returncode != 0:
         error(f'error getting sshd pid, stderr dump:\n{err}')
     
     return int(out)
-    
+
 
 def tracee_capture(args: argparse.Namespace):
     global local, running, container_id
@@ -709,7 +811,8 @@ def tracee_capture(args: argparse.Namespace):
         prepare_local_capture(args)
     else:
         ssh_client = ssh_connect(args)
-        sshd_pid = prepare_remote_capture(args, ssh_client)
+        sftp_client = ssh_client.open_sftp()
+        sshd_pid = prepare_remote_capture(args, ssh_client, sftp_client)
     
     # remove container from previous run
     if len(args.container_name) > 0:
@@ -736,11 +839,15 @@ def tracee_capture(args: argparse.Namespace):
     
     running = False
 
-    # copy tracee logs file
+    # copy tracee logs file and output directory
     if not local:
-        sftp_client = ssh_client.open_sftp()
         sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
-        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_LOGFILE}')
+        sftp_client.remove(REMOTE_CAPTURE_LOGFILE)
+        copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+        _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
+        if returncode != 0:
+            error(f'error removing output directory from remote machine, stderr dump:\n{err}')
+        sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
@@ -793,6 +900,7 @@ def main():
     # custom arguments
     parser.add_argument('--capture-type', type=str, default=DEFAULT_CAPTURE_TYPE)
     parser.add_argument('--logfile', type=str, default=DEFAULT_LOGFILE)
+    parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('--container-image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--container-name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
@@ -808,6 +916,9 @@ def main():
     parser.add_argument('--exec', type=str)
     parser.add_argument('--process-scope', type=str)
     parser.add_argument('--event-sets', type=str)
+    parser.add_argument('--capture-artifacts', type=str)
+    parser.add_argument('--network-filtered', action='store_true', default=False)
+    parser.add_argument('--network-snaplen', type=str, default=DEFAULT_SNAPLEN)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
