@@ -94,6 +94,8 @@ The general flow of building Traceeshark is as follows:
 
 ### 1. Clone Traceeshark
 
+:warning: On Windows, before cloning Traceeshark, make sure to run the following command: `git config --global core.autocrlf false`. Without this, git will insert carriage returns into the files and will break an important shell script!
+
 ```bash
 git clone git@bitbucket.org:scalock/traceeshark.git
 cd traceeshark

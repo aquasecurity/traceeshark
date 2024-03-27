@@ -279,7 +279,7 @@ def show_config(reload_option: Optional[str]):
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--network-snaplen', display='Packet snaplen', type='string',
-            validation='^(default|headers|max|\d+(b|kb))$',
+            validation='^(default|headers|max|\\d+(b|kb))$',
             default=DEFAULT_SNAPLEN,
             tooltip='Length of captured packets. See the "Forensics" section of Tracee\'s documentation for details',
             group=TRACEE_OPTIONS_GROUP
@@ -951,8 +951,8 @@ def main():
 
 
 if __name__ == '__main__':
-    #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
+    #sys.stderr.write(f'{sys.argv}\n')
     try:
         main()
     # RuntimeError is raised by the error() function which already printed
