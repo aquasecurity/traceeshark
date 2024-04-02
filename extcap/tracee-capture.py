@@ -47,7 +47,7 @@ PRESET_GROUP = 'Preset control'
 DEFAULT_CAPTURE_TYPE = 'local'
 DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
-DEFAULT_CONTAINER_NAME = 'tracee'
+DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 
 
@@ -707,6 +707,12 @@ def tracee_capture(args: argparse.Namespace):
     else:
         ssh_client = ssh_connect(args)
         sshd_pid = prepare_remote_capture(args, ssh_client)
+    
+    # remove container from previous run
+    if len(args.container_name) > 0:
+        _, err, returncode = send_command(local, f"docker rm -f {args.container_name}")
+        if returncode != 0 and 'No such container' not in err:
+            error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
 
     # start reader thread
     reader_th = Thread(target=read_output, args=(args.fifo,))
