@@ -641,7 +641,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
     # on Windows, the previous capture doesn't terminate before the current one when restarting the capture,
     # so we have to wait a bit to give the previous capture a chance to clean up its forwarded ports
-    for _ in range(10):
+    for i in range(10):
         try:
             ssh_data_client.get_transport().request_port_forward('127.0.0.1', DATA_PORT)
         except paramiko.SSHException as ex:
@@ -650,6 +650,9 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
                 error(str(ex))
             
             if 'TCP forwarding request denied' in str(ex):
+                # this was the last attempt
+                if i == 9:
+                    error(str(ex))
                 # retry in 1 second
                 sleep(1)
             # unrelated error
