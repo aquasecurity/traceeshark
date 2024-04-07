@@ -543,7 +543,7 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
         return send_local_command(command)
     
     if ssh_client is None:
-        raise ValueError()
+        raise ValueError('no SSH client provided')
     
     return send_ssh_command(ssh_client, command)
 
@@ -710,7 +710,7 @@ def tracee_capture(args: argparse.Namespace):
     
     # remove container from previous run
     if len(args.container_name) > 0:
-        _, err, returncode = send_command(local, f"docker rm -f {args.container_name}")
+        _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
 
