@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Dict, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -55,12 +55,31 @@ DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
 DEFAULT_SNAPLEN = 'default'
 
+# corresponds to "enum InterfaceControlCommand" from wireshark/ui/qt/interface_toolbar.cpp
+CTRL_CMD_INITIALIZED = 0
+CTRL_CMD_SET         = 1
+CTRL_CMD_ADD         = 2
+CTRL_CMD_REMOVE      = 3
+CTRL_CMD_ENABLE      = 4
+CTRL_CMD_DISABLE     = 5
+CTRL_CMD_STATUSBAR   = 6
+CTRL_CMD_INFORMATION = 7
+CTRL_CMD_WARNING     = 8
+CTRL_CMD_ERROR       = 9
+
+# corresponds to the toolbar buttons, 0 is reserved for sending CTRL_CMD_INITIALIZED
+CTRL_ARG_STOP         = 1
+CTRL_ARG_COPY_ON_STOP = 2
+CTRL_ARG_COPY_OUTPUT  = 3
+
 
 args: argparse.Namespace = None
 container_id: str = None
 running: bool = True
 local: bool = True
 stopping: bool = False
+copy_output: bool = False
+sftp_client: paramiko.SFTPClient = None
 
 
 def show_version():
@@ -70,6 +89,9 @@ def show_version():
 def show_interfaces():
     print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
     print("interface {value=tracee}{display=Tracee capture}")
+    print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
+    print("control {number=%d}{type=boolean}{display=Copy on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
 
 
 class ConfigArg:
@@ -408,7 +430,7 @@ def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
 
 
-def get_fake_pcap_header():
+def get_fake_pcap_header() -> bytearray:
     header = bytearray()
     header += struct.pack('<L', int('a1b2c3d4', 16))
     header += struct.pack('<H', 2)  # Pcap Major Version
@@ -428,7 +450,7 @@ def parse_ts(event: str) -> int:
     return int(event[13: event.find(b',')])
 
 
-def write_event(event, extcap_pipe):
+def write_event(event: bytes, extcap_pipe: BinaryIO):
     packet = bytearray()
 
     caplen = len(event)
@@ -470,7 +492,8 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
             username=args.ssh_username,
             password=args.ssh_password,
             key_filename=args.ssh_privkey,
-            passphrase=args.ssh_passphrase
+            passphrase=args.ssh_passphrase,
+            timeout=10
         )
     
     except paramiko.SSHException as ex:
@@ -579,6 +602,63 @@ def read_output(extcap_pipe: str):
         pass
 
 
+def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
+    header = inf.read(6)
+    magic, high8, low16, arg, cmd = struct.unpack('>sBHBB', header)
+
+    if magic != b'T':
+        raise ValueError(f'unexpected control magic value {magic}')
+    
+    length = (high8 << 16) + low16
+    payload = inf.read(length - 2) if length > 2 else None
+
+    return arg, cmd, payload
+
+
+def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
+    msg = bytearray()
+
+    length = len(payload) + 2
+    high8 = (length >> 16) & 0xff
+    low16 = length & 0xffff
+
+    msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
+    msg += payload
+
+    outf.write(msg)
+    outf.flush()
+
+
+def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
+    global copy_output, local, sftp_client
+
+    toolbar_copy_output = True
+
+    with open(control_in, 'rb', 0) as inf:
+        while True:
+            try:
+                arg, _, payload = control_read(inf)
+            except Exception as ex:
+                raise ex
+            if arg is None:
+                break
+
+            if arg == CTRL_ARG_STOP:
+                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
+                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
+                copy_output = toolbar_copy_output
+                stop_capture(is_error=False)
+            elif arg == CTRL_ARG_COPY_ON_STOP:
+                toolbar_copy_output = payload == b'\x01'
+            elif arg == CTRL_ARG_COPY_OUTPUT and not local:
+                if sftp_client is not None:
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
+                    copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
+
+
 def send_local_command(command: str) -> Tuple[str, str, int]:
     if WINDOWS:
         proc = subp.Popen(['cmd.exe', '/C', command], stdout=subp.PIPE, stderr=subp.PIPE)
@@ -608,7 +688,7 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
 
 
 def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
-    os.makedirs(local_dir, exist_ok=False)
+    os.makedirs(local_dir, exist_ok=True)
 
     for filename in sftp_client.listdir(remote_dir):
         if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
@@ -785,7 +865,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id
+    global local, running, container_id, sftp_client, copy_output
 
     if args.capture_type == 'local':
         local = True
@@ -800,6 +880,13 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
+    # open toolbar control output pipe
+    control_outf = open(args.extcap_control_out, 'wb')
+
+    # start toolbar control thread
+    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
+    control_th.start()
+    
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
@@ -810,7 +897,10 @@ def tracee_capture(args: argparse.Namespace):
         sshd_pid = None
         prepare_local_capture(args)
     else:
-        ssh_client = ssh_connect(args)
+        try:
+            ssh_client = ssh_connect(args)
+        except TimeoutError:
+            error('SSH connection timed out')
         sftp_client = ssh_client.open_sftp()
         sshd_pid = prepare_remote_capture(args, ssh_client, sftp_client)
     
@@ -843,11 +933,14 @@ def tracee_capture(args: argparse.Namespace):
     if not local:
         sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
         sftp_client.remove(REMOTE_CAPTURE_LOGFILE)
-        copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
-        _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
-        if returncode != 0:
-            error(f'error removing output directory from remote machine, stderr dump:\n{err}')
         sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+
+        if copy_output:
+            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Copying output folder...')
+            copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+            _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
+            if returncode != 0:
+                error(f'error removing output directory from remote machine, stderr dump:\n{err}')
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
@@ -868,6 +961,8 @@ def tracee_capture(args: argparse.Namespace):
     
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
+    
+    control_outf.close()
 
 
 def handle_reload(option: str, args: argparse.Namespace):
@@ -888,14 +983,16 @@ def main():
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Capture events and packets using Tracee')
 
     # extcap arguments
-    parser.add_argument("--extcap-interfaces", help="Provide a list of interfaces to capture from", action="store_true")
-    parser.add_argument("--extcap-version", help="Shows the version of this utility", nargs='?', default="")
-    parser.add_argument("--extcap-config", help="Provide a list of configurations for the given interface", action="store_true")
-    parser.add_argument("--extcap-interface", help="Provide the interface to capture from")
-    parser.add_argument("--extcap-dlts", help="Provide a list of dlts for the given interface", action="store_true")
-    parser.add_argument("--capture", help="Start the capture routine", action="store_true")
-    parser.add_argument("--fifo", help="Use together with capture to provide the fifo to dump data to")
-    parser.add_argument("--extcap-reload-option", help="Reload elements for the given option")
+    parser.add_argument('--extcap-interfaces', help='Provide a list of interfaces to capture from', action='store_true')
+    parser.add_argument('--extcap-version', help='Shows the version of this utility', nargs='?', default='')
+    parser.add_argument('--extcap-config', help='Provide a list of configurations for the given interface', action='store_true')
+    parser.add_argument('--extcap-interface', help='Provide the interface to capture from')
+    parser.add_argument('--extcap-dlts', help='Provide a list of dlts for the given interface', action='store_true')
+    parser.add_argument('--capture', help='Start the capture routine', action='store_true')
+    parser.add_argument('--fifo', help='Use together with capture to provide the fifo to dump data to')
+    parser.add_argument('--extcap-reload-option', help='Reload elements for the given option')
+    parser.add_argument('--extcap-control-in', help='Used to get control messages from toolbar')
+    parser.add_argument('--extcap-control-out', help='Used to send control messages to toolbar')
 
     # custom arguments
     parser.add_argument('--capture-type', type=str, default=DEFAULT_CAPTURE_TYPE)
