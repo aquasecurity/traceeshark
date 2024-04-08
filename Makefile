@@ -50,12 +50,14 @@ install:
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
+	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
 	@mkdir -p ~/.config/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py
 	@chmod +x ~/.config/wireshark/extcap/tracee-capture.py
 	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
+	@chmod +x ~/.config/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
 	@mkdir -p ~/.local/lib/wireshark/plugins/epan
 	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Dict, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -9,6 +9,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess as subp
 import sys
@@ -37,6 +38,8 @@ DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
 REMOTE_CAPTURE_LOGFILE = '/tmp/tracee_logs.log'
+REMOTE_CAPTURE_OUTPUT_DIR = '/tmp/tracee_output'
+REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
 
 GENERAL_GROUP = 'General'
@@ -49,6 +52,25 @@ DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
 DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
+DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
+DEFAULT_SNAPLEN = 'default'
+
+# corresponds to "enum InterfaceControlCommand" from wireshark/ui/qt/interface_toolbar.cpp
+CTRL_CMD_INITIALIZED = 0
+CTRL_CMD_SET         = 1
+CTRL_CMD_ADD         = 2
+CTRL_CMD_REMOVE      = 3
+CTRL_CMD_ENABLE      = 4
+CTRL_CMD_DISABLE     = 5
+CTRL_CMD_STATUSBAR   = 6
+CTRL_CMD_INFORMATION = 7
+CTRL_CMD_WARNING     = 8
+CTRL_CMD_ERROR       = 9
+
+# corresponds to the toolbar buttons, 0 is reserved for sending CTRL_CMD_INITIALIZED
+CTRL_ARG_STOP         = 1
+CTRL_ARG_COPY_ON_STOP = 2
+CTRL_ARG_COPY_OUTPUT  = 3
 
 
 args: argparse.Namespace = None
@@ -56,6 +78,8 @@ container_id: str = None
 running: bool = True
 local: bool = True
 stopping: bool = False
+copy_output: bool = False
+sftp_client: paramiko.SFTPClient = None
 
 
 def show_version():
@@ -65,6 +89,9 @@ def show_version():
 def show_interfaces():
     print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
     print("interface {value=tracee}{display=Tracee capture}")
+    print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
+    print("control {number=%d}{type=boolean}{display=Copy on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
 
 
 class ConfigArg:
@@ -151,6 +178,32 @@ def get_effective_tracee_options(args: argparse.Namespace) -> str:
     if args.event_sets is not None:
         options += f' --events {args.event_sets}'
     
+    # add artifacts to capture
+    network = False
+    network_captures = []
+
+    if args.capture_artifacts is not None:
+        for artifact in args.capture_artifacts.split(','):
+            if 'network' not in artifact:
+                options += f' --capture {artifact}'
+            else:
+                if not network:
+                    options += f' --capture network'
+                    network = True
+                if artifact == 'network-single':
+                    network_captures.append('single')
+                elif artifact == 'network-per-process':
+                    network_captures.append('process')
+                elif artifact == 'network-per-command':
+                    network_captures.append('command')
+                elif artifact == 'network-per-container':
+                    network_captures.append('container')
+                
+        if network:
+            options += f' --capture pcap:{",".join(network_captures)} --capture pcap-snaplen:{args.network_snaplen}'
+            if args.network_filtered:
+                options += ' --capture pcap-options:filtered'
+    
     return options
 
 
@@ -175,6 +228,10 @@ def show_config(reload_option: Optional[str]):
         ),
         ConfigArg(call='--logfile', display='Tracee logs file', type='fileselect',
             default=DEFAULT_LOGFILE,
+            group=GENERAL_GROUP
+        ),
+        ConfigArg(call='--output-dir', display='Tracee output folder', type='string',
+            default=DEFAULT_OUTPUT_DIR,
             group=GENERAL_GROUP
         ),
         ConfigArg(call='--container-image', display='Docker image', type='string',
@@ -235,6 +292,20 @@ def show_config(reload_option: Optional[str]):
             tooltip='Sets of events to trace',
             group=TRACEE_OPTIONS_GROUP
         ),
+        ConfigArg(call='--capture-artifacts', display='Capture artifacts', type='multicheck',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--network-filtered', display='Filter network capture', type='boolflag',
+            tooltip='Capture packets according to the events being traced',
+            default='false',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--network-snaplen', display='Packet snaplen', type='string',
+            validation='^(default|headers|max|\\d+(b|kb))$',
+            default=DEFAULT_SNAPLEN,
+            tooltip='Length of captured packets. See the "Forensics" section of Tracee\'s documentation for details',
+            group=TRACEE_OPTIONS_GROUP
+        ),
         ConfigArg(call='--preset', display='Preset', type='selector',
             tooltip='Tracee options preset',
             group=PRESET_GROUP,
@@ -261,6 +332,7 @@ def show_config(reload_option: Optional[str]):
     id_container_scope = ConfigArg.id_from_call('--container-scope')
     id_process_scope = ConfigArg.id_from_call('--process-scope')
     id_event_sets = ConfigArg.id_from_call('--event-sets')
+    id_capture = ConfigArg.id_from_call('--capture-artifacts')
     id_preset = ConfigArg.id_from_call('--preset')
     id_preset_from_file = ConfigArg.id_from_call('--preset-from-file')
     id_delete_preset = ConfigArg.id_from_call('--delete-preset')
@@ -319,7 +391,16 @@ def show_config(reload_option: Optional[str]):
         ConfigVal(arg=id_event_sets, value='system_keys', display='system_keys', enabled='true', parent='system'),
         ConfigVal(arg=id_event_sets, value='container', display='container', enabled='true'),
         ConfigVal(arg=id_event_sets, value='derived', display='derived', enabled='true'),
-        ConfigVal(arg=id_event_sets, value='security_alert', display='security_alert', enabled='true')
+        ConfigVal(arg=id_event_sets, value='security_alert', display='security_alert', enabled='true'),
+        ConfigVal(arg=id_capture, value='exec', display='Executable files', enabled='true'),
+        ConfigVal(arg=id_capture, value='module', display='Kernel modules', enabled='true'),
+        ConfigVal(arg=id_capture, value='bpf', display='eBPF programs', enabled='true'),
+        ConfigVal(arg=id_capture, value='mem', display='Memory regions (mem_prot_alert)', enabled='true'),
+        ConfigVal(arg=id_capture, value='network', display='Network packets', enabled='false'),
+        ConfigVal(arg=id_capture, value='network-single', display='Single pcap', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-process', display='Per process', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-command', display='Per command', enabled='true', parent='network'),
+        ConfigVal(arg=id_capture, value='network-per-container', display='Per container', enabled='true', parent='network')
     ]
 
     if reload_option is None or reload_option == 'preset':
@@ -349,7 +430,7 @@ def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
 
 
-def get_fake_pcap_header():
+def get_fake_pcap_header() -> bytearray:
     header = bytearray()
     header += struct.pack('<L', int('a1b2c3d4', 16))
     header += struct.pack('<H', 2)  # Pcap Major Version
@@ -369,7 +450,7 @@ def parse_ts(event: str) -> int:
     return int(event[13: event.find(b',')])
 
 
-def write_event(event, extcap_pipe):
+def write_event(event: bytes, extcap_pipe: BinaryIO):
     packet = bytearray()
 
     caplen = len(event)
@@ -411,7 +492,8 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
             username=args.ssh_username,
             password=args.ssh_password,
             key_filename=args.ssh_privkey,
-            passphrase=args.ssh_passphrase
+            passphrase=args.ssh_passphrase,
+            timeout=10
         )
     
     except paramiko.SSHException as ex:
@@ -439,10 +521,10 @@ def stop_capture(is_error: bool = False):
         if not local:
             ssh_client = ssh_connect(args)
         
-        command = f'docker kill {container_id}'
+        command = f'docker stop {container_id}'
         _, err, returncode = send_command(local, command, ssh_client)
-        if returncode != 0 and 'No such container' not in err:
-            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}\n')
+        if returncode != 0 and 'No such container' not in err and 'is not running' not in err:
+            error(f'docker stop returned with error code {returncode}, stderr dump:\n{err}\n')
         
         # an error occurred so we assume the main thread is not functioning, remove the container here
         if is_error:
@@ -456,7 +538,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
 
-def read_output(extcap_pipe: str):
+def read_output(extcap_pipe_f: BinaryIO):
     global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
@@ -466,9 +548,6 @@ def read_output(extcap_pipe: str):
     
     # create msgpack unpacker
     unpacker = msgpack.Unpacker(raw=True)
-    
-    # open extcap pipe
-    extcap_pipe_f = open(extcap_pipe, 'wb')
 
     # write fake PCAP header
     extcap_pipe_f.write(get_fake_pcap_header())
@@ -514,10 +593,63 @@ def read_output(extcap_pipe: str):
     if tracee_output_conn is not None:
         tracee_output_conn.close()
     tracee_output_sock.close()
-    try:
-        extcap_pipe_f.close()
-    except OSError:
-        pass
+
+
+def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
+    header = inf.read(6)
+    magic, high8, low16, arg, cmd = struct.unpack('>sBHBB', header)
+
+    if magic != b'T':
+        raise ValueError(f'unexpected control magic value {magic}')
+    
+    length = (high8 << 16) + low16
+    payload = inf.read(length - 2) if length > 2 else None
+
+    return arg, cmd, payload
+
+
+def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
+    msg = bytearray()
+
+    length = len(payload) + 2
+    high8 = (length >> 16) & 0xff
+    low16 = length & 0xffff
+
+    msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
+    msg += payload
+
+    outf.write(msg)
+    outf.flush()
+
+
+def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
+    global copy_output, local, sftp_client
+
+    toolbar_copy_output = True
+
+    with open(control_in, 'rb', 0) as inf:
+        while True:
+            try:
+                arg, _, payload = control_read(inf)
+            except OSError:
+                break
+            if arg is None:
+                break
+
+            if arg == CTRL_ARG_STOP:
+                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
+                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
+                copy_output = toolbar_copy_output
+                stop_capture(is_error=False)
+            elif arg == CTRL_ARG_COPY_ON_STOP:
+                toolbar_copy_output = payload == b'\x01'
+            elif arg == CTRL_ARG_COPY_OUTPUT and not local:
+                if sftp_client is not None:
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
+                    copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
+                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
 
 
 def send_local_command(command: str) -> Tuple[str, str, int]:
@@ -548,6 +680,43 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
     return send_ssh_command(ssh_client, command)
 
 
+def sftp_get(sftp_client: paramiko.SFTPClient, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
+    """
+    Custom implementation of SFTPClient.get(), where the file size obtained from stat()
+    is enforced so that a growing file does not get copied indefinitely.
+    """
+    size_copied = 0
+
+    with open(localpath, 'wb') as fl:
+        file_size = sftp_client.stat(remotepath).st_size
+        with sftp_client.open(remotepath, 'rb') as fr:
+            if prefetch:
+                fr.prefetch(file_size, max_concurrent_prefetch_requests)
+            
+            while size_copied < file_size:
+                data = fr.read(min(32768, file_size - size_copied))
+                fl.write(data)
+                size_copied += len(data)
+                if len(data) == 0:
+                    break
+
+    s = os.stat(localpath)
+    if s.st_size != size_copied:
+        raise IOError(
+            "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
+        )
+
+
+def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
+    os.makedirs(local_dir, exist_ok=True)
+
+    for filename in sftp_client.listdir(remote_dir):
+        if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
+            copy_dir_from_remote(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+        else:
+            sftp_get(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+
+
 def error(msg: str) -> NoReturn:
     sys.stderr.write(f'{msg}\n')
     stop_capture(is_error=True)
@@ -575,7 +744,9 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         command += f' --name {args.container_name}'
     
     logfile = args.logfile if local else REMOTE_CAPTURE_LOGFILE
-    command += f' {args.docker_options} -v {logfile}:/logs.log:rw {args.container_image} {tracee_options}'
+    output_dir = args.output_dir if local else REMOTE_CAPTURE_OUTPUT_DIR
+    new_entrypoint = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh') if local else REMOTE_CAPTURE_NEW_ENTRYPOINT
+    command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if sshd_pid is not None:
@@ -588,7 +759,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         if local and LINUX:
             command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
-    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log'
+    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log --capture dir:/output --capture clear-dir --capabilities add=cap_dac_override'
 
     return command
 
@@ -629,13 +800,33 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
 
 
 def prepare_local_capture(args: argparse.Namespace):
-    # create file to get logs from tracee
+    # create empty file to get logs from tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
     open(args.logfile, 'w').close()
 
+    # create directory for tracee output files
+    if os.path.isdir(args.output_dir):
+        shutil.rmtree(args.output_dir)
+    elif os.path.isfile(args.output_dir):
+        os.remove(args.output_dir)
+    os.makedirs(args.output_dir)
+    os.chmod(args.output_dir, 0o2775) # g+ws
 
-def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient) -> int:
+
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp_client: paramiko.SFTPClient) -> int:
+    # remove preexisting tracee logs file
+    if os.path.isdir(args.logfile):
+        shutil.rmtree(args.logfile)
+    elif os.path.isfile(args.logfile):
+        os.remove(args.logfile)
+    
+    # remove preexisting tracee output directory
+    if os.path.isdir(args.output_dir):
+        shutil.rmtree(args.output_dir)
+    elif os.path.isfile(args.output_dir):
+        os.remove(args.output_dir)
+    
     # prepare ssh tunnel to receive output
     ssh_data_client = ssh_connect(args)
 
@@ -674,16 +865,27 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     if returncode != 0:
         error(f'error creating file for tracee logs, stderr dump:\n{err}')
     
+    # create directory for tracee output files
+    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_OUTPUT_DIR} && mkdir {REMOTE_CAPTURE_OUTPUT_DIR} && chmod g+ws {REMOTE_CAPTURE_OUTPUT_DIR}')
+    if returncode != 0:
+        error(f'error creating output directory for tracee, stderr dump:\n{err}')
+    
+    # copy new container entrypoint
+    sftp_client.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
+    if returncode != 0:
+        error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
+    
     # get pid of sshd responsible for the ssh tunnel (it constantly polls its sockets which may spam the capture)
     out, err, returncode = send_ssh_command(ssh_data_client, "echo $PPID")
     if returncode != 0:
         error(f'error getting sshd pid, stderr dump:\n{err}')
     
     return int(out)
-    
+
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id
+    global local, running, container_id, sftp_client, copy_output
 
     if args.capture_type == 'local':
         local = True
@@ -698,6 +900,13 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
+    # open toolbar control output pipe
+    control_outf = open(args.extcap_control_out, 'wb')
+
+    # start toolbar control thread
+    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
+    control_th.start()
+    
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
@@ -708,17 +917,24 @@ def tracee_capture(args: argparse.Namespace):
         sshd_pid = None
         prepare_local_capture(args)
     else:
-        ssh_client = ssh_connect(args)
-        sshd_pid = prepare_remote_capture(args, ssh_client)
+        try:
+            ssh_client = ssh_connect(args)
+        except TimeoutError:
+            error('SSH connection timed out')
+        sftp_client = ssh_client.open_sftp()
+        sshd_pid = prepare_remote_capture(args, ssh_client, sftp_client)
     
     # remove container from previous run
     if len(args.container_name) > 0:
         _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # open extcap pipe
+    extcap_pipe_f = open(args.fifo, 'wb')
 
     # start reader thread
-    reader_th = Thread(target=read_output, args=(args.fifo,))
+    reader_th = Thread(target=read_output, args=(extcap_pipe_f,))
     reader_th.start()
 
     # run tracee container
@@ -736,11 +952,23 @@ def tracee_capture(args: argparse.Namespace):
     
     running = False
 
-    # copy tracee logs file
+    # copy tracee logs file and output directory
     if not local:
-        sftp_client = ssh_client.open_sftp()
         sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
-        send_ssh_command(ssh_client, f'rm {REMOTE_CAPTURE_LOGFILE}')
+        sftp_client.remove(REMOTE_CAPTURE_LOGFILE)
+        sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+
+        if copy_output:
+            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Copying output folder...')
+            copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+            _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
+            if returncode != 0:
+                error(f'error removing output directory from remote machine, stderr dump:\n{err}')
+    
+    try:
+        extcap_pipe_f.close()
+    except OSError:
+        pass
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
@@ -761,6 +989,8 @@ def tracee_capture(args: argparse.Namespace):
     
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
+    
+    control_outf.close()
 
 
 def handle_reload(option: str, args: argparse.Namespace):
@@ -781,18 +1011,21 @@ def main():
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__), description='Capture events and packets using Tracee')
 
     # extcap arguments
-    parser.add_argument("--extcap-interfaces", help="Provide a list of interfaces to capture from", action="store_true")
-    parser.add_argument("--extcap-version", help="Shows the version of this utility", nargs='?', default="")
-    parser.add_argument("--extcap-config", help="Provide a list of configurations for the given interface", action="store_true")
-    parser.add_argument("--extcap-interface", help="Provide the interface to capture from")
-    parser.add_argument("--extcap-dlts", help="Provide a list of dlts for the given interface", action="store_true")
-    parser.add_argument("--capture", help="Start the capture routine", action="store_true")
-    parser.add_argument("--fifo", help="Use together with capture to provide the fifo to dump data to")
-    parser.add_argument("--extcap-reload-option", help="Reload elements for the given option")
+    parser.add_argument('--extcap-interfaces', help='Provide a list of interfaces to capture from', action='store_true')
+    parser.add_argument('--extcap-version', help='Shows the version of this utility', nargs='?', default='')
+    parser.add_argument('--extcap-config', help='Provide a list of configurations for the given interface', action='store_true')
+    parser.add_argument('--extcap-interface', help='Provide the interface to capture from')
+    parser.add_argument('--extcap-dlts', help='Provide a list of dlts for the given interface', action='store_true')
+    parser.add_argument('--capture', help='Start the capture routine', action='store_true')
+    parser.add_argument('--fifo', help='Use together with capture to provide the fifo to dump data to')
+    parser.add_argument('--extcap-reload-option', help='Reload elements for the given option')
+    parser.add_argument('--extcap-control-in', help='Used to get control messages from toolbar')
+    parser.add_argument('--extcap-control-out', help='Used to send control messages to toolbar')
 
     # custom arguments
     parser.add_argument('--capture-type', type=str, default=DEFAULT_CAPTURE_TYPE)
     parser.add_argument('--logfile', type=str, default=DEFAULT_LOGFILE)
+    parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument('--container-image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--container-name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
@@ -808,6 +1041,9 @@ def main():
     parser.add_argument('--exec', type=str)
     parser.add_argument('--process-scope', type=str)
     parser.add_argument('--event-sets', type=str)
+    parser.add_argument('--capture-artifacts', type=str)
+    parser.add_argument('--network-filtered', action='store_true', default=False)
+    parser.add_argument('--network-snaplen', type=str, default=DEFAULT_SNAPLEN)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
@@ -840,8 +1076,8 @@ def main():
 
 
 if __name__ == '__main__':
-    #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
+    #sys.stderr.write(f'{sys.argv}\n')
     try:
         main()
     # RuntimeError is raised by the error() function which already printed

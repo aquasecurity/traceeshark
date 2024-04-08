@@ -51,4 +51,5 @@ mkdir -p $EXTCAP_DIR
 cp extcap/tracee-capture.py $EXTCAP_DIR
 chmod +x $EXTCAP_DIR/tracee-capture.py
 cp -r extcap/tracee-capture $EXTCAP_DIR
+chmod +x $EXTCAP_DIR/tracee-capture/new-entrypoint.sh
 echo "[*] Installed extcap to $EXTCAP_DIR"
