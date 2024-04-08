@@ -687,6 +687,33 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
     return send_ssh_command(ssh_client, command)
 
 
+def sftp_get(sftp_client: paramiko.SFTPClient, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
+    """
+    Custom implementation of SFTPClient.get(), where the file size obtained from stat()
+    is enforced so that a growing file does not get copied indefinitely.
+    """
+    size_copied = 0
+
+    with open(localpath, 'wb') as fl:
+        file_size = sftp_client.stat(remotepath).st_size
+        with sftp_client.open(remotepath, 'rb') as fr:
+            if prefetch:
+                fr.prefetch(file_size, max_concurrent_prefetch_requests)
+            
+            while size_copied < file_size:
+                data = fr.read(min(32768, file_size - size_copied))
+                fl.write(data)
+                size_copied += len(data)
+                if len(data) == 0:
+                    break
+
+    s = os.stat(localpath)
+    if s.st_size != size_copied:
+        raise IOError(
+            "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
+        )
+
+
 def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
     os.makedirs(local_dir, exist_ok=True)
 
@@ -694,7 +721,7 @@ def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, loca
         if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
             copy_dir_from_remote(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
         else:
-            sftp_client.get(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+            sftp_get(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
 
 
 def error(msg: str) -> NoReturn:
