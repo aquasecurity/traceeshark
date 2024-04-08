@@ -538,7 +538,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
 
-def read_output(extcap_pipe: str):
+def read_output(extcap_pipe_f: BinaryIO):
     global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
@@ -548,9 +548,6 @@ def read_output(extcap_pipe: str):
     
     # create msgpack unpacker
     unpacker = msgpack.Unpacker(raw=True)
-    
-    # open extcap pipe
-    extcap_pipe_f = open(extcap_pipe, 'wb')
 
     # write fake PCAP header
     extcap_pipe_f.write(get_fake_pcap_header())
@@ -596,10 +593,6 @@ def read_output(extcap_pipe: str):
     if tracee_output_conn is not None:
         tracee_output_conn.close()
     tracee_output_sock.close()
-    try:
-        extcap_pipe_f.close()
-    except OSError:
-        pass
 
 
 def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
@@ -638,8 +631,8 @@ def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
         while True:
             try:
                 arg, _, payload = control_read(inf)
-            except Exception as ex:
-                raise ex
+            except OSError:
+                break
             if arg is None:
                 break
 
@@ -936,9 +929,12 @@ def tracee_capture(args: argparse.Namespace):
         _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # open extcap pipe
+    extcap_pipe_f = open(args.fifo, 'wb')
 
     # start reader thread
-    reader_th = Thread(target=read_output, args=(args.fifo,))
+    reader_th = Thread(target=read_output, args=(extcap_pipe_f,))
     reader_th.start()
 
     # run tracee container
@@ -968,6 +964,11 @@ def tracee_capture(args: argparse.Namespace):
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
+    
+    try:
+        extcap_pipe_f.close()
+    except OSError:
+        pass
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
