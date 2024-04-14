@@ -30,10 +30,10 @@ Now the plugins should be available using your installed Wireshark.
 
 ### Setup for live capture
 
-To use live capture, the `paramiko` and `msgpack` python libraries must be installed:
+To use live capture, a few python libraries must be installed:
 
 ```
-pip3 install paramiko msgpack
+pip3 install paramiko msgpack pcapng
 ```
 
 Additionally, the user must be able to run docker containers.
@@ -43,7 +43,7 @@ Additionally, the user must be able to run docker containers.
 On Linux, add your user to the docker group:
 
 ```bash
-sudo usermod -aG docker $USER
+sudo usermod -aG docker <user>
 ```
 
 On Windows and Mac, make sure docker desktop is installed and your user can run containers.

@@ -5,6 +5,7 @@ from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
 import argparse
 from ctypes import cdll, byref, create_string_buffer
 import os
+import pcapng
 import select
 import shutil
 import signal
@@ -430,19 +431,22 @@ def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
 
 
-def get_fake_pcap_header() -> bytearray:
-    header = bytearray()
-    header += struct.pack('<L', int('a1b2c3d4', 16))
-    header += struct.pack('<H', 2)  # Pcap Major Version
-    header += struct.pack('<H', 4)  # Pcap Minor Version
-    header += struct.pack('<I', 0)  # Timezone
-    header += struct.pack('<I', 0)  # Accuracy of timestamps
-    header += struct.pack('<L', 0xffffffff)  # Max Length of capture frame
-    header += struct.pack('<L', DLT_USER0)  # custom Tracee JSON encapsulation
-    return header
+def init_pcapng(outf: BinaryIO) -> pcapng.FileWriter:
+    shb = pcapng.blocks.SectionHeader()
+    shb.new_member(
+        pcapng.blocks.InterfaceDescription,
+        link_type=DLT_USER0,
+        options={
+            "if_name": "tracee",
+            "if_description": "Tracee event",
+            "if_tsresol": pcapng.utils.pack_timestamp_resolution(10, 9) # nanoseconds
+        }
+    )
+
+    return pcapng.FileWriter(outf, shb)
 
 
-def parse_ts(event: str) -> int:
+def parse_ts(event: bytes) -> int:
     if not event.startswith(b'{"timestamp":'):
         raise ValueError(f'invalid event: {event}')
     
@@ -450,27 +454,16 @@ def parse_ts(event: str) -> int:
     return int(event[13: event.find(b',')])
 
 
-def write_event(event: bytes, extcap_pipe: BinaryIO):
-    packet = bytearray()
-
-    caplen = len(event)
+def write_event(event: bytes, writer: pcapng.FileWriter):
     ts = parse_ts(event)
-    timestamp_secs = int(ts / 1000000000)
-    timestamp_usecs = int((ts % 1000000000) / 1000)
-
-    # TODO: temporary workaround for tracee timestamp bug
-    if timestamp_secs < 0 or timestamp_secs > 2**32-1:
-        timestamp_secs = 0
-        timestamp_usecs = 0
-
-    packet += struct.pack('<L', timestamp_secs) # timestamp seconds
-    packet += struct.pack('<L', timestamp_usecs)  # timestamp microseconds
-    packet += struct.pack('<L', caplen)  # length captured
-    packet += struct.pack('<L', caplen)  # length in frame
-
-    packet += event
-
-    extcap_pipe.write(packet)
+    epb = writer.current_section.new_member(
+        pcapng.blocks.EnhancedPacket,
+        timestamp_high = ts >> 32,
+        timestamp_low = ts & 0xffffffff,
+        packet_len = len(event),
+        packet_data = event
+    )
+    writer.write_block(epb)
 
 
 def set_proc_name(newname: str):
@@ -549,8 +542,8 @@ def read_output(extcap_pipe_f: BinaryIO):
     # create msgpack unpacker
     unpacker = msgpack.Unpacker(raw=True)
 
-    # write fake PCAP header
-    extcap_pipe_f.write(get_fake_pcap_header())
+    # initialize the pcapng file we are writing to Wireshark's pipe
+    writer = init_pcapng(extcap_pipe_f)
     
     # open tracee output socket and listen for an incoming connection
     tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -582,10 +575,10 @@ def read_output(extcap_pipe_f: BinaryIO):
 
         # unpack any ready events and write them to wireshark's pipe
         for entry in unpacker:
-            write_event(entry[2][b'event'], extcap_pipe_f)
+            write_event(entry[2][b'event'], writer)
         try:
             extcap_pipe_f.flush()
-        # on windows wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the wireshark pipe breaks
+        # on Windows Wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the Wireshark pipe breaks
         except OSError:
             stop_capture()
             break
@@ -593,6 +586,14 @@ def read_output(extcap_pipe_f: BinaryIO):
     if tracee_output_conn is not None:
         tracee_output_conn.close()
     tracee_output_sock.close()
+
+
+def reader_thread(extcap_pipe_f: BinaryIO):
+    try:
+        read_output(extcap_pipe_f)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
 
 
 def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
@@ -934,7 +935,7 @@ def tracee_capture(args: argparse.Namespace):
     extcap_pipe_f = open(args.fifo, 'wb')
 
     # start reader thread
-    reader_th = Thread(target=read_output, args=(extcap_pipe_f,))
+    reader_th = Thread(target=reader_thread, args=(extcap_pipe_f,))
     reader_th.start()
 
     # run tracee container
@@ -984,7 +985,7 @@ def tracee_capture(args: argparse.Namespace):
     # remove tracee container
     command = f'docker rm {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
-    if returncode != 0:
+    if returncode != 0 and 'No such container' not in err:
         error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
     
     if len(logs_err) > 0:
