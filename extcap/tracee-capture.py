@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -33,6 +33,7 @@ else:
     os.makedirs(TMP_DIR, exist_ok=True)
 
 EXTCAP_VERSION = 'VERSION_PLACEHOLDER'
+DLT_NULL = 0
 DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
@@ -67,9 +68,10 @@ CTRL_CMD_WARNING     = 8
 CTRL_CMD_ERROR       = 9
 
 # corresponds to the toolbar buttons, 0 is reserved for sending CTRL_CMD_INITIALIZED
-CTRL_ARG_STOP         = 1
-CTRL_ARG_COPY_ON_STOP = 2
-CTRL_ARG_COPY_OUTPUT  = 3
+CTRL_ARG_STOP           = 1
+CTRL_ARG_COPY_ON_STOP   = 2
+CTRL_ARG_COPY_OUTPUT    = 3
+CTRL_ARG_INJECT_PACKETS = 4
 
 
 args: argparse.Namespace = None
@@ -92,6 +94,7 @@ def show_interfaces():
     print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
     print("control {number=%d}{type=boolean}{display=Copy on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
+    print("control {number=%d}{type=button}{display=Inject packets}{tooltip=Inject packets captured by Tracee into the capture stream}" % CTRL_ARG_INJECT_PACKETS)
 
 
 class ConfigArg:
@@ -428,24 +431,26 @@ def show_config(reload_option: Optional[str]):
 
 def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
+    print("dlt {number=%d}{name=NULL}{display=Tracee packet}" % DLT_NULL)
 
 
 class OutputManager:
     def __init__(self, extcap_pipe: str):
         # Initialize the pcapng file that is written to Wireshark's pipe.
-        # Any access to the pipe and writer must be guarded by a lock.
+        # Any access to the pipe and writer must be guarded by the lock.
+        self._lock = Lock()
         self._extcap_pipe_f = open(extcap_pipe, 'wb')
         self._writer = self._init_pcapng()
     
     def write_block(self, block: pcapng.blocks.SectionMemberBlock):
-        with Lock():
+        with self._lock:
             self._writer.write_block(block)
             self._extcap_pipe_f.flush()
     
     def write_event(self, event: bytes):
         ts = self._parse_ts(event)
 
-        with Lock():
+        with self._lock:
             epb = self._writer.current_section.new_member(
                 pcapng.blocks.EnhancedPacket,
                 timestamp_high = ts >> 32,
@@ -455,6 +460,14 @@ class OutputManager:
             )
         
         self.write_block(epb)
+    
+    def get_current_section(self) -> pcapng.blocks.SectionHeader:
+        with self._lock:
+            return self._writer.current_section
+    
+    def register_interface(self, interface: pcapng.blocks.InterfaceDescription):
+        with self._lock:
+            self._writer.current_section.register_interface(interface)
     
     def _init_pcapng(self) -> pcapng.FileWriter:
         shb = pcapng.blocks.SectionHeader()
@@ -470,7 +483,7 @@ class OutputManager:
             }
         )
 
-        with Lock():
+        with self._lock:
             return pcapng.FileWriter(self._extcap_pipe_f, shb)
     
     def _parse_ts(self, event: bytes) -> int:
@@ -527,6 +540,7 @@ def stop_capture(is_error: bool = False):
     # disable toolbar buttons
     control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
     control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
+    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
 
     if container_id is not None:
         ssh_client = None
@@ -611,6 +625,79 @@ def reader_thread(output_manager: OutputManager):
         raise
 
 
+class PacketInjector:
+    CURRENT_IFACE_ID: int = 1 # start from 1, as interface id 0 is reserved for the events interface
+
+    def __init__(self, output_manager: OutputManager, output_dir: str):
+        self.output_manager = output_manager
+        self.output_dir = output_dir
+
+        # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
+        self.file_state: Dict[str, Tuple[int, int]] = {}
+    
+    def inject_packets(self) -> Iterator[str]:
+        pcap_dir = os.path.join(self.output_dir, 'out', 'pcap')
+
+        # if there is a per-process capture, use it as it contains the richest context
+        if os.path.isdir(os.path.join(pcap_dir, 'processes')):
+            for container in os.listdir(os.path.join(pcap_dir, 'processes')):
+                for pcap in os.listdir(os.path.join(pcap_dir, 'processes', container)):
+                    pid = pcap.split('_')[-2]
+                    comm = '_'.join(pcap.split('_')[:-2]) # don't naively take the first part because process name may contain underscores
+                    yield f'PID {pid} ({comm})'
+                    self._inject_packets_from_pcap(os.path.join(pcap_dir, 'processes', container, pcap))
+        
+        # the next preferred capture type is per-command
+        elif os.path.isdir(os.path.join(pcap_dir, 'commands')):
+            for container in os.listdir(os.path.join(pcap_dir, 'commands')):
+                for pcap in os.listdir(os.path.join(pcap_dir, 'commands', container)):
+                    yield f'command {pcap.rstrip(".pcap")}'
+                    self._inject_packets_from_pcap(os.path.join(pcap_dir, 'commands', container, pcap))
+        
+        # the next preferred capture type is per-container
+        elif os.path.isdir(os.path.join(pcap_dir, 'containers')):
+            for pcap in os.listdir(os.path.join(pcap_dir, 'containers')):
+                yield f'container {pcap.rstrip(".pcap")}'
+                self._inject_packets_from_pcap(os.path.join(pcap_dir, 'containers', pcap))
+        
+        # the least preferred capture type is the single pcap, which doesn't contain any context
+        elif os.path.exists(os.path.join(pcap_dir, 'single.pcap')):
+            yield f'single PCAP'
+            self._inject_packets_from_pcap(os.path.join(pcap_dir, 'single.pcap'))
+
+    
+    def _inject_packets_from_pcap(self, pcap_file: str):
+        with open(pcap_file, 'rb') as f:
+            scanner = pcapng.FileScanner(f)
+
+            for block in scanner:
+                # don't write section header blocks, as sections cannot be interleaved
+                if isinstance(block, pcapng.blocks.SectionHeader):
+                    continue
+                
+                block.section = self.output_manager.get_current_section()
+
+                if isinstance(block, pcapng.blocks.InterfaceDescription):
+                    # we did not encounter this file yet
+                    if pcap_file not in self.file_state:
+                        block.interface_id = PacketInjector.CURRENT_IFACE_ID
+                        PacketInjector.CURRENT_IFACE_ID += 1
+                        self.output_manager.register_interface(block)
+                        self.file_state[pcap_file] = (block.interface_id, 0)
+                    else:
+                        continue
+                
+                elif isinstance(block, pcapng.blocks.EnhancedPacket):
+                    # don't write packets that we already encountered
+                    if block.timestamp <= self.file_state[pcap_file][1]:
+                        continue
+
+                    block.interface_id = self.file_state[pcap_file][0]
+                    self.file_state[pcap_file] = (block.interface_id, block.timestamp)
+                
+                self.output_manager.write_block(block)
+
+
 def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
     header = inf.read(6)
     magic, high8, low16, arg, cmd = struct.unpack('>sBHBB', header)
@@ -638,15 +725,15 @@ def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
     outf.flush()
 
 
-def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
+def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str, packet_injector: PacketInjector):
     global copy_output, local, sftp_client
 
     toolbar_copy_output = True
 
-    with open(control_in, 'rb', 0) as inf:
+    with open(control_in, 'rb') as control_inf:
         while True:
             try:
-                arg, _, payload = control_read(inf)
+                arg, _, payload = control_read(control_inf)
             except OSError:
                 break
             if arg is None:
@@ -656,8 +743,10 @@ def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
                 control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
                 copy_output = toolbar_copy_output
                 stop_capture(is_error=False)
+            
             elif arg == CTRL_ARG_COPY_ON_STOP:
                 toolbar_copy_output = payload == b'\x01'
+            
             elif arg == CTRL_ARG_COPY_OUTPUT and not local:
                 if sftp_client is not None:
                     control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
@@ -665,6 +754,27 @@ def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
                     copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
                     control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
                     control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
+            
+            elif arg == CTRL_ARG_INJECT_PACKETS:
+                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
+
+                if not local:
+                    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Remote captures not yet supported!')
+                    continue
+                
+                for pcap_desc in packet_injector.inject_packets():
+                    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, f'Injecting packets from {pcap_desc}...'.encode())
+                
+                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_ENABLE, b'')
+                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Inject packets')
+
+
+def toolbar_thread(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, packet_injector: PacketInjector):
+    try:
+        toolbar_control(control_inf, control_outf, output_dir, packet_injector)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
 
 
 def send_local_command(command: str) -> Tuple[str, str, int]:
@@ -902,12 +1012,16 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 def tracee_capture(args: argparse.Namespace):
     global local, running, container_id, sftp_client, copy_output, control_outf
 
+    # initialize output manager and packet injector
+    output_manager = OutputManager(args.fifo)
+    packet_injector = PacketInjector(output_manager, args.output_dir)
+
     # Open the toolbar control output pipe and start toolbar control thread before anything that can fail runs.
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
     # TODO: the output control pipe should be synchronized (both the toolbar thread and this function can write to it),
     # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
     control_outf = open(args.extcap_control_out, 'wb')
-    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
+    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir, packet_injector), daemon=True)
     control_th.start()
 
     if args.capture_type == 'local':
@@ -945,9 +1059,6 @@ def tracee_capture(args: argparse.Namespace):
         _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
-    
-    # initialize output manager
-    output_manager = OutputManager(args.fifo)
 
     # start reader thread
     reader_th = Thread(target=reader_thread, args=(output_manager,))
@@ -987,15 +1098,19 @@ def tracee_capture(args: argparse.Namespace):
         return
     
     # check tracee logs for errors
+    logs_err = ''
     command = f'docker logs {container_id}'
-    _, logs_err, returncode = send_command(local, command, ssh_client)
+    _, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
-        error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
+        if 'dead or marked for removal' not in err:
+            error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
+    else:
+        logs_err = err
     
     # remove tracee container
     command = f'docker rm {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
-    if returncode != 0 and 'No such container' not in err:
+    if returncode != 0 and 'No such container' not in err and 'is already in progress' not in err:
         error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
     
     if len(logs_err) > 0:
