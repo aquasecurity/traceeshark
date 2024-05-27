@@ -80,7 +80,6 @@ running: bool = True
 local: bool = True
 stopping: bool = False
 copy_output: bool = False
-sftp_client: paramiko.SFTPClient = None
 control_outf: BinaryIO = None
 
 
@@ -625,6 +624,64 @@ def reader_thread(output_manager: OutputManager):
         raise
 
 
+class SFTPManager:
+    def __init__(self, sftp_client: paramiko.SFTPClient):
+        self._sftp_client = sftp_client
+        self._lock = Lock()
+    
+    def copy_dir_from_remote(self, remote_dir: str, local_dir: str):
+        os.makedirs(local_dir, exist_ok=True)
+
+        for filename in self.listdir(remote_dir):
+            if stat.S_ISDIR(self.stat(f'{remote_dir}/{filename}').st_mode):
+                self.copy_dir_from_remote(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+            else:
+                self.get(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+    
+    def get(self, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
+        """
+        Custom implementation of SFTPClient.get(), where the file size obtained from stat()
+        is enforced so that a growing file does not get copied indefinitely.
+        """
+        size_copied = 0
+
+        with open(localpath, 'wb') as fl:
+            with self._lock:
+                file_size = self._sftp_client.stat(remotepath).st_size
+                with self._sftp_client.open(remotepath, 'rb') as fr:
+                    if prefetch:
+                        fr.prefetch(file_size, max_concurrent_prefetch_requests)
+                    
+                    while size_copied < file_size:
+                        data = fr.read(min(32768, file_size - size_copied))
+                        fl.write(data)
+                        size_copied += len(data)
+                        if len(data) == 0:
+                            break
+
+        s = os.stat(localpath)
+        if s.st_size != size_copied:
+            raise IOError(
+                "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
+            )
+    
+    def listdir(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.listdir(*args, **kwargs)
+    
+    def stat(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.stat(*args, **kwargs)
+    
+    def put(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.put(*args, **kwargs)
+    
+    def remove(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.remove(*args, **kwargs)
+
+
 class PacketInjector:
     CURRENT_IFACE_ID: int = 1 # start from 1, as interface id 0 is reserved for the events interface
 
@@ -725,53 +782,51 @@ def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
     outf.flush()
 
 
-def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str, packet_injector: PacketInjector):
-    global copy_output, local, sftp_client
+def toolbar_control(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
+    global copy_output, local
 
     toolbar_copy_output = True
 
-    with open(control_in, 'rb') as control_inf:
-        while True:
-            try:
-                arg, _, payload = control_read(control_inf)
-            except OSError:
-                break
-            if arg is None:
-                break
+    while True:
+        try:
+            arg, _, payload = control_read(control_inf)
+        except OSError:
+            break
+        if arg is None:
+            break
 
-            if arg == CTRL_ARG_STOP:
-                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
-                copy_output = toolbar_copy_output
-                stop_capture(is_error=False)
+        if arg == CTRL_ARG_STOP:
+            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
+            copy_output = toolbar_copy_output
+            stop_capture(is_error=False)
+        
+        elif arg == CTRL_ARG_COPY_ON_STOP:
+            toolbar_copy_output = payload == b'\x01'
+        
+        elif arg == CTRL_ARG_COPY_OUTPUT and not local:
+            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
+            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
+            sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
+            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
+            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
+        
+        elif arg == CTRL_ARG_INJECT_PACKETS:
+            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
+
+            if not local:
+                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Remote captures not yet supported!')
+                continue
             
-            elif arg == CTRL_ARG_COPY_ON_STOP:
-                toolbar_copy_output = payload == b'\x01'
+            for pcap_desc in packet_injector.inject_packets():
+                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, f'Injecting packets from {pcap_desc}...'.encode())
             
-            elif arg == CTRL_ARG_COPY_OUTPUT and not local:
-                if sftp_client is not None:
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
-                    copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
-            
-            elif arg == CTRL_ARG_INJECT_PACKETS:
-                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
-
-                if not local:
-                    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Remote captures not yet supported!')
-                    continue
-                
-                for pcap_desc in packet_injector.inject_packets():
-                    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, f'Injecting packets from {pcap_desc}...'.encode())
-                
-                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_ENABLE, b'')
-                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Inject packets')
+            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_ENABLE, b'')
+            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Inject packets')
 
 
-def toolbar_thread(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, packet_injector: PacketInjector):
+def toolbar_thread(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
     try:
-        toolbar_control(control_inf, control_outf, output_dir, packet_injector)
+        toolbar_control(control_inf, control_outf, output_dir, sftp, packet_injector)
     except Exception:
         stop_capture(is_error=True)
         raise
@@ -803,43 +858,6 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
         raise ValueError('no SSH client provided')
     
     return send_ssh_command(ssh_client, command)
-
-
-def sftp_get(sftp_client: paramiko.SFTPClient, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
-    """
-    Custom implementation of SFTPClient.get(), where the file size obtained from stat()
-    is enforced so that a growing file does not get copied indefinitely.
-    """
-    size_copied = 0
-
-    with open(localpath, 'wb') as fl:
-        file_size = sftp_client.stat(remotepath).st_size
-        with sftp_client.open(remotepath, 'rb') as fr:
-            if prefetch:
-                fr.prefetch(file_size, max_concurrent_prefetch_requests)
-            
-            while size_copied < file_size:
-                data = fr.read(min(32768, file_size - size_copied))
-                fl.write(data)
-                size_copied += len(data)
-                if len(data) == 0:
-                    break
-
-    s = os.stat(localpath)
-    if s.st_size != size_copied:
-        raise IOError(
-            "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
-        )
-
-
-def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
-    os.makedirs(local_dir, exist_ok=True)
-
-    for filename in sftp_client.listdir(remote_dir):
-        if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
-            copy_dir_from_remote(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
-        else:
-            sftp_get(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
 
 
 def error(msg: str) -> NoReturn:
@@ -939,7 +957,7 @@ def prepare_local_capture(args: argparse.Namespace):
     os.chmod(args.output_dir, 0o2775) # g+ws
 
 
-def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp_client: paramiko.SFTPClient) -> int:
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp: SFTPManager) -> int:
     # remove preexisting tracee logs file
     if os.path.isdir(args.logfile):
         shutil.rmtree(args.logfile)
@@ -996,7 +1014,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         error(f'error creating output directory for tracee, stderr dump:\n{err}')
     
     # copy new container entrypoint
-    sftp_client.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
     _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
     if returncode != 0:
         error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
@@ -1010,19 +1028,14 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id, sftp_client, copy_output, control_outf
+    global local, running, container_id, copy_output, control_outf
 
-    # initialize output manager and packet injector
-    output_manager = OutputManager(args.fifo)
-    packet_injector = PacketInjector(output_manager, args.output_dir)
-
-    # Open the toolbar control output pipe and start toolbar control thread before anything that can fail runs.
+    # Open the toolbar control pipes before anything that can fail runs.
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
     # TODO: the output control pipe should be synchronized (both the toolbar thread and this function can write to it),
     # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
     control_outf = open(args.extcap_control_out, 'wb')
-    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir, packet_injector), daemon=True)
-    control_th.start()
+    control_inf = open(args.extcap_control_in, 'rb')
 
     if args.capture_type == 'local':
         local = True
@@ -1044,6 +1057,7 @@ def tracee_capture(args: argparse.Namespace):
 
     if local:
         ssh_client = None
+        sftp = None
         sshd_pid = None
         prepare_local_capture(args)
     else:
@@ -1051,14 +1065,22 @@ def tracee_capture(args: argparse.Namespace):
             ssh_client = ssh_connect(args)
         except TimeoutError:
             error('SSH connection timed out')
-        sftp_client = ssh_client.open_sftp()
-        sshd_pid = prepare_remote_capture(args, ssh_client, sftp_client)
+        sftp = SFTPManager(ssh_client.open_sftp())
+        sshd_pid = prepare_remote_capture(args, ssh_client, sftp)
     
     # remove container from previous run
     if len(args.container_name) > 0:
         _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # initialize output manager and packet injector
+    output_manager = OutputManager(args.fifo)
+    packet_injector = PacketInjector(output_manager, args.output_dir)
+    
+    # start toolbar control thread
+    control_th = Thread(target=toolbar_control, args=(control_inf, control_outf, args.output_dir, sftp, packet_injector), daemon=True)
+    control_th.start()
 
     # start reader thread
     reader_th = Thread(target=reader_thread, args=(output_manager,))
@@ -1081,13 +1103,13 @@ def tracee_capture(args: argparse.Namespace):
 
     # copy tracee logs file and output directory
     if not local:
-        sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
-        sftp_client.remove(REMOTE_CAPTURE_LOGFILE)
-        sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+        sftp.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
+        sftp.remove(REMOTE_CAPTURE_LOGFILE)
+        sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
 
         if copy_output:
             control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
-            copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+            sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
