@@ -79,6 +79,7 @@ local: bool = True
 stopping: bool = False
 copy_output: bool = False
 sftp_client: paramiko.SFTPClient = None
+control_outf: BinaryIO = None
 
 
 def show_version():
@@ -515,13 +516,17 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
 
 
 def stop_capture(is_error: bool = False):
-    global running, container_id, local, args, stopping
+    global running, container_id, local, args, stopping, control_outf
 
     if stopping:
         return
     
     stopping = True
     running = False
+
+    # disable toolbar buttons
+    control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
+    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
 
     if container_id is not None:
         ssh_client = None
@@ -648,7 +653,6 @@ def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
                 break
 
             if arg == CTRL_ARG_STOP:
-                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
                 control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
                 copy_output = toolbar_copy_output
                 stop_capture(is_error=False)
@@ -896,7 +900,15 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id, sftp_client, copy_output
+    global local, running, container_id, sftp_client, copy_output, control_outf
+
+    # Open the toolbar control output pipe and start toolbar control thread before anything that can fail runs.
+    # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
+    # TODO: the output control pipe should be synchronized (both the toolbar thread and this function can write to it),
+    # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
+    control_outf = open(args.extcap_control_out, 'wb')
+    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
+    control_th.start()
 
     if args.capture_type == 'local':
         local = True
@@ -937,13 +949,6 @@ def tracee_capture(args: argparse.Namespace):
     # initialize output manager
     output_manager = OutputManager(args.fifo)
 
-    # open toolbar control output pipe and start toolbar control thread
-    # TODO: the output control pipe should be synchronized (bot the toolbar thread and this function can write to it),
-    # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
-    control_outf = open(args.extcap_control_out, 'wb')
-    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
-    control_th.start()
-
     # start reader thread
     reader_th = Thread(target=reader_thread, args=(output_manager,))
     reader_th.start()
@@ -970,7 +975,7 @@ def tracee_capture(args: argparse.Namespace):
         sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
 
         if copy_output:
-            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Copying output folder...')
+            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
             copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
