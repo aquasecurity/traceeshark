@@ -5,7 +5,6 @@ from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
 import argparse
 from ctypes import cdll, byref, create_string_buffer
 import os
-import pcapng
 import select
 import shutil
 import signal
@@ -14,25 +13,24 @@ import stat
 import struct
 import subprocess as subp
 import sys
-from threading import Thread
+from threading import Lock, Thread
 from time import sleep
 
 import msgpack
 import paramiko
+import pcapng
+
 
 LINUX = sys.platform.startswith('linux')
 WINDOWS = os.name == 'nt'
 MAC = sys.platform == 'darwin'
 
-
 if WINDOWS:
-    APPDATA = os.getenv('APPDATA')
-    TMP_DIR = os.path.join(APPDATA, 'Traceeshark')
+    TMP_DIR = os.path.join(os.getenv('APPDATA'), 'Traceeshark')
 
 else:
     TMP_DIR = '/tmp/traceeshark'
     os.makedirs(TMP_DIR, exist_ok=True)
-
 
 EXTCAP_VERSION = 'VERSION_PLACEHOLDER'
 DLT_USER0 = 147
@@ -431,39 +429,55 @@ def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
 
 
-def init_pcapng(outf: BinaryIO) -> pcapng.FileWriter:
-    shb = pcapng.blocks.SectionHeader()
-    shb.new_member(
-        pcapng.blocks.InterfaceDescription,
-        link_type=DLT_USER0,
-        options={
-            "if_name": "tracee",
-            "if_description": "Tracee event",
-            "if_tsresol": pcapng.utils.pack_timestamp_resolution(10, 9) # nanoseconds
-        }
-    )
-
-    return pcapng.FileWriter(outf, shb)
-
-
-def parse_ts(event: bytes) -> int:
-    if not event.startswith(b'{"timestamp":'):
-        raise ValueError(f'invalid event: {event}')
+class OutputManager:
+    def __init__(self, extcap_pipe: str):
+        # Initialize the pcapng file that is written to Wireshark's pipe.
+        # Any access to the pipe and writer must be guarded by a lock.
+        self._extcap_pipe_f = open(extcap_pipe, 'wb')
+        self._writer = self._init_pcapng()
     
-    # skip {"timestamp": in the beginning of the event
-    return int(event[13: event.find(b',')])
+    def write_block(self, block: pcapng.blocks.SectionMemberBlock):
+        with Lock():
+            self._writer.write_block(block)
+            self._extcap_pipe_f.flush()
+    
+    def write_event(self, event: bytes):
+        ts = self._parse_ts(event)
 
+        with Lock():
+            epb = self._writer.current_section.new_member(
+                pcapng.blocks.EnhancedPacket,
+                timestamp_high = ts >> 32,
+                timestamp_low = ts & 0xffffffff,
+                packet_len = len(event),
+                packet_data = event
+            )
+        
+        self.write_block(epb)
+    
+    def _init_pcapng(self) -> pcapng.FileWriter:
+        shb = pcapng.blocks.SectionHeader()
 
-def write_event(event: bytes, writer: pcapng.FileWriter):
-    ts = parse_ts(event)
-    epb = writer.current_section.new_member(
-        pcapng.blocks.EnhancedPacket,
-        timestamp_high = ts >> 32,
-        timestamp_low = ts & 0xffffffff,
-        packet_len = len(event),
-        packet_data = event
-    )
-    writer.write_block(epb)
+        # create interface description for events
+        shb.new_member(
+            pcapng.blocks.InterfaceDescription,
+            link_type=DLT_USER0,
+            options={
+                "if_name": "tracee",
+                "if_description": "Tracee event",
+                "if_tsresol": pcapng.utils.pack_timestamp_resolution(10, 9) # nanoseconds
+            }
+        )
+
+        with Lock():
+            return pcapng.FileWriter(self._extcap_pipe_f, shb)
+    
+    def _parse_ts(self, event: bytes) -> int:
+        if not event.startswith(b'{"timestamp":'):
+            raise ValueError(f'invalid event: {event}')
+        
+        # skip {"timestamp": in the beginning of the event
+        return int(event[13: event.find(b',')])
 
 
 def set_proc_name(newname: str):
@@ -531,7 +545,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
 
-def read_output(extcap_pipe_f: BinaryIO):
+def read_output(output_manager: OutputManager):
     global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
@@ -541,9 +555,6 @@ def read_output(extcap_pipe_f: BinaryIO):
     
     # create msgpack unpacker
     unpacker = msgpack.Unpacker(raw=True)
-
-    # initialize the pcapng file we are writing to Wireshark's pipe
-    writer = init_pcapng(extcap_pipe_f)
     
     # open tracee output socket and listen for an incoming connection
     tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -575,22 +586,21 @@ def read_output(extcap_pipe_f: BinaryIO):
 
         # unpack any ready events and write them to wireshark's pipe
         for entry in unpacker:
-            write_event(entry[2][b'event'], writer)
-        try:
-            extcap_pipe_f.flush()
-        # on Windows Wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the Wireshark pipe breaks
-        except OSError:
-            stop_capture()
-            break
+            try:
+                output_manager.write_event(entry[2][b'event'])
+            # on Windows Wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the Wireshark pipe breaks
+            except OSError:
+                stop_capture()
+                break
     
     if tracee_output_conn is not None:
         tracee_output_conn.close()
     tracee_output_sock.close()
 
 
-def reader_thread(extcap_pipe_f: BinaryIO):
+def reader_thread(output_manager: OutputManager):
     try:
-        read_output(extcap_pipe_f)
+        read_output(output_manager)
     except Exception:
         stop_capture(is_error=True)
         raise
@@ -901,13 +911,6 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
-    # open toolbar control output pipe
-    control_outf = open(args.extcap_control_out, 'wb')
-
-    # start toolbar control thread
-    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
-    control_th.start()
-    
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
@@ -931,11 +934,18 @@ def tracee_capture(args: argparse.Namespace):
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
     
-    # open extcap pipe
-    extcap_pipe_f = open(args.fifo, 'wb')
+    # initialize output manager
+    output_manager = OutputManager(args.fifo)
+
+    # open toolbar control output pipe and start toolbar control thread
+    # TODO: the output control pipe should be synchronized (bot the toolbar thread and this function can write to it),
+    # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
+    control_outf = open(args.extcap_control_out, 'wb')
+    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
+    control_th.start()
 
     # start reader thread
-    reader_th = Thread(target=reader_thread, args=(extcap_pipe_f,))
+    reader_th = Thread(target=reader_thread, args=(output_manager,))
     reader_th.start()
 
     # run tracee container
@@ -965,11 +975,6 @@ def tracee_capture(args: argparse.Namespace):
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
-    
-    try:
-        extcap_pipe_f.close()
-    except OSError:
-        pass
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
