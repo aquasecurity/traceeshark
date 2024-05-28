@@ -5,7 +5,7 @@ from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
 import argparse
 from ctypes import cdll, byref, create_string_buffer
 import os
-import select
+from select import select
 import shutil
 import signal
 import socket
@@ -492,7 +492,9 @@ class DataOutputManager:
         )
 
         with self._lock:
-            return pcapng.FileWriter(self._extcap_pipe_f, shb)
+            writer = pcapng.FileWriter(self._extcap_pipe_f, shb)
+            self._extcap_pipe_f.flush()
+            return writer
     
     def _parse_ts(self, event: bytes) -> int:
         if not event.startswith(b'{"timestamp":'):
@@ -877,8 +879,6 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
             arg, _, payload = control_read(control_inf)
         except OSError:
             break
-        if arg is None:
-            break
         if not running:
             break
 
@@ -1044,7 +1044,7 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
         return
     
     while True:
-        r, _, _ = select.select([sock, channel], [], [])
+        r, _, _ = select([sock, channel], [], [])
         if sock in r:
             try:
                 data = sock.recv(1024)
@@ -1279,8 +1279,6 @@ def tracee_capture(args: argparse.Namespace):
     
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
-    
-    control_outf.close()
 
 
 def handle_reload(option: str, args: argparse.Namespace):
