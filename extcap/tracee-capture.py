@@ -80,7 +80,7 @@ running: bool = True
 local: bool = True
 stopping: bool = False
 copy_output: bool = False
-control_outf: BinaryIO = None
+control_output_manager: 'ControlOutputManager' = None
 
 
 def show_version():
@@ -433,7 +433,7 @@ def show_dlts():
     print("dlt {number=%d}{name=NULL}{display=Tracee packet}" % DLT_NULL)
 
 
-class OutputManager:
+class DataOutputManager:
     def __init__(self, extcap_pipe: str):
         # Initialize the pcapng file that is written to Wireshark's pipe.
         # Any access to the pipe and writer must be guarded by the lock.
@@ -528,7 +528,7 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
 
 
 def stop_capture(is_error: bool = False):
-    global running, container_id, local, args, stopping, control_outf
+    global running, container_id, local, args, stopping, control_output_manager
 
     if stopping:
         return
@@ -537,9 +537,9 @@ def stop_capture(is_error: bool = False):
     running = False
 
     # disable toolbar buttons
-    control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
-    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
-    control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
+    control_output_manager.disable_button(CTRL_ARG_STOP)
+    control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
+    control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
 
     if container_id is not None:
         ssh_client = None
@@ -563,7 +563,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
 
-def read_output(output_manager: OutputManager):
+def read_output(data_output_manager: DataOutputManager):
     global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
@@ -605,7 +605,7 @@ def read_output(output_manager: OutputManager):
         # unpack any ready events and write them to wireshark's pipe
         for entry in unpacker:
             try:
-                output_manager.write_event(entry[2][b'event'])
+                data_output_manager.write_event(entry[2][b'event'])
             # on Windows Wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the Wireshark pipe breaks
             except OSError:
                 stop_capture()
@@ -616,9 +616,9 @@ def read_output(output_manager: OutputManager):
     tracee_output_sock.close()
 
 
-def reader_thread(output_manager: OutputManager):
+def reader_thread(data_output_manager: DataOutputManager):
     try:
-        read_output(output_manager)
+        read_output(data_output_manager)
     except Exception:
         stop_capture(is_error=True)
         raise
@@ -705,8 +705,8 @@ class SFTPManager:
 class PacketInjector:
     CURRENT_IFACE_ID: int = 1 # start from 1, as interface id 0 is reserved for the events interface
 
-    def __init__(self, output_manager: OutputManager, sftp: SFTPManager, output_dir: str):
-        self.output_manager = output_manager
+    def __init__(self, data_output_manager: DataOutputManager, sftp: SFTPManager, output_dir: str):
+        self.data_output_manager = data_output_manager
         self.sftp = sftp
         self.output_dir = output_dir
 
@@ -774,14 +774,14 @@ class PacketInjector:
                 if isinstance(block, pcapng.blocks.SectionHeader):
                     continue
                 
-                block.section = self.output_manager.get_current_section()
+                block.section = self.data_output_manager.get_current_section()
 
                 if isinstance(block, pcapng.blocks.InterfaceDescription):
                     # we did not encounter this file yet
                     if pcap_full_path not in self.file_state:
                         block.interface_id = PacketInjector.CURRENT_IFACE_ID
                         PacketInjector.CURRENT_IFACE_ID += 1
-                        self.output_manager.register_interface(block)
+                        self.data_output_manager.register_interface(block)
                         self.file_state[pcap_full_path] = (block.interface_id, 0)
                     else:
                         continue
@@ -794,7 +794,36 @@ class PacketInjector:
                     block.interface_id = self.file_state[pcap_full_path][0]
                     self.file_state[pcap_full_path] = (block.interface_id, block.timestamp)
                 
-                self.output_manager.write_block(block)
+                self.data_output_manager.write_block(block)
+
+
+class ControlOutputManager:
+    def __init__(self, control_outf: BinaryIO):
+        self._control_outf = control_outf
+        self._lock = Lock()
+    
+    def disable_button(self, button: int):
+        self._control_write(button, CTRL_CMD_DISABLE, b'')
+    
+    def enable_button(self, button: int):
+        self._control_write(button, CTRL_CMD_ENABLE, b'')
+    
+    def set_button_text(self, button: int, text: str):
+        self._control_write(button, CTRL_CMD_SET, text.encode())
+
+    def _control_write(self, arg: int, cmd: int, payload: bytes):
+        msg = bytearray()
+
+        length = len(payload) + 2
+        high8 = (length >> 16) & 0xff
+        low16 = length & 0xffff
+
+        msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
+        msg += payload
+
+        with self._lock:
+            self._control_outf.write(msg)
+            self._control_outf.flush()
 
 
 def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
@@ -810,21 +839,7 @@ def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
     return arg, cmd, payload
 
 
-def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
-    msg = bytearray()
-
-    length = len(payload) + 2
-    high8 = (length >> 16) & 0xff
-    low16 = length & 0xffff
-
-    msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
-    msg += payload
-
-    outf.write(msg)
-    outf.flush()
-
-
-def toolbar_control(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
+def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
     global copy_output, local
 
     toolbar_copy_output = True
@@ -838,7 +853,7 @@ def toolbar_control(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: s
             break
 
         if arg == CTRL_ARG_STOP:
-            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
+            control_output_manager.set_button_text(CTRL_ARG_STOP, 'Stopping...')
             copy_output = toolbar_copy_output
             stop_capture(is_error=False)
         
@@ -846,25 +861,25 @@ def toolbar_control(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: s
             toolbar_copy_output = payload == b'\x01'
         
         elif arg == CTRL_ARG_COPY_OUTPUT and not local:
-            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
-            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
+            control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
             sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
-            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
-            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
+            control_output_manager.enable_button(CTRL_ARG_COPY_OUTPUT)
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copy output')
         
         elif arg == CTRL_ARG_INJECT_PACKETS:
-            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
+            control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
             
             for pcap_desc in packet_injector.inject_packets():
-                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, f'Injecting packets from {pcap_desc}...'.encode())
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
             
-            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_ENABLE, b'')
-            control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Inject packets')
+            control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
+            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
 
 
-def toolbar_thread(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
+def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
     try:
-        toolbar_control(control_inf, control_outf, output_dir, sftp, packet_injector)
+        toolbar_control(control_inf, control_output_manager, output_dir, sftp, packet_injector)
     except Exception:
         stop_capture(is_error=True)
         raise
@@ -1066,7 +1081,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id, copy_output, control_outf
+    global local, running, container_id, copy_output, control_output_manager
 
     # Open the toolbar control pipes before anything that can fail runs.
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
@@ -1112,16 +1127,17 @@ def tracee_capture(args: argparse.Namespace):
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
     
-    # initialize output manager and packet injector
-    output_manager = OutputManager(args.fifo)
-    packet_injector = PacketInjector(output_manager, sftp, args.output_dir)
+    # initialize output managers and packet injector
+    data_output_manager = DataOutputManager(args.fifo)
+    control_output_manager = ControlOutputManager(control_outf)
+    packet_injector = PacketInjector(data_output_manager, sftp, args.output_dir)
     
     # start toolbar control thread
-    control_th = Thread(target=toolbar_control, args=(control_inf, control_outf, args.output_dir, sftp, packet_injector), daemon=True)
+    control_th = Thread(target=toolbar_control, args=(control_inf, control_output_manager, args.output_dir, sftp, packet_injector), daemon=True)
     control_th.start()
 
     # start reader thread
-    reader_th = Thread(target=reader_thread, args=(output_manager,))
+    reader_th = Thread(target=reader_thread, args=(data_output_manager,))
     reader_th.start()
 
     # run tracee container
@@ -1146,7 +1162,7 @@ def tracee_capture(args: argparse.Namespace):
         sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
 
         if copy_output:
-            control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
             sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
