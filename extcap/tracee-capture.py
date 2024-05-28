@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import BinaryIO, Dict, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -13,27 +13,27 @@ import stat
 import struct
 import subprocess as subp
 import sys
-from threading import Thread
+from threading import Lock, Thread
 from time import sleep
 
 import msgpack
 import paramiko
+import pcapng
+
 
 LINUX = sys.platform.startswith('linux')
 WINDOWS = os.name == 'nt'
 MAC = sys.platform == 'darwin'
 
-
 if WINDOWS:
-    APPDATA = os.getenv('APPDATA')
-    TMP_DIR = os.path.join(APPDATA, 'Traceeshark')
+    TMP_DIR = os.path.join(os.getenv('APPDATA'), 'Traceeshark')
 
 else:
     TMP_DIR = '/tmp/traceeshark'
     os.makedirs(TMP_DIR, exist_ok=True)
 
-
 EXTCAP_VERSION = 'VERSION_PLACEHOLDER'
+DLT_NULL = 0
 DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
@@ -54,6 +54,7 @@ DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
 DEFAULT_SNAPLEN = 'default'
+DEFAULT_PACKET_INJECTION_INTERVAL = 30
 
 # corresponds to "enum InterfaceControlCommand" from wireshark/ui/qt/interface_toolbar.cpp
 CTRL_CMD_INITIALIZED = 0
@@ -68,9 +69,11 @@ CTRL_CMD_WARNING     = 8
 CTRL_CMD_ERROR       = 9
 
 # corresponds to the toolbar buttons, 0 is reserved for sending CTRL_CMD_INITIALIZED
-CTRL_ARG_STOP         = 1
-CTRL_ARG_COPY_ON_STOP = 2
-CTRL_ARG_COPY_OUTPUT  = 3
+CTRL_ARG_STOP           = 1
+CTRL_ARG_COPY_ON_STOP   = 2
+CTRL_ARG_INJECT_PACKETS_ON_STOP = 3
+CTRL_ARG_COPY_OUTPUT    = 4
+CTRL_ARG_INJECT_PACKETS = 5
 
 
 args: argparse.Namespace = None
@@ -79,7 +82,8 @@ running: bool = True
 local: bool = True
 stopping: bool = False
 copy_output: bool = False
-sftp_client: paramiko.SFTPClient = None
+inject_packets: bool = False
+control_output_manager: 'ControlOutputManager' = None
 
 
 def show_version():
@@ -90,8 +94,10 @@ def show_interfaces():
     print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
     print("interface {value=tracee}{display=Tracee capture}")
     print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
-    print("control {number=%d}{type=boolean}{display=Copy on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=boolean}{display=Copy output on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=boolean}{display=Inject packets on stop}{default=true}{tooltip=Inject packets when stopping the capture}" % CTRL_ARG_INJECT_PACKETS_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
+    print("control {number=%d}{type=button}{display=Inject packets}{tooltip=Inject packets captured by Tracee into the capture stream}" % CTRL_ARG_INJECT_PACKETS)
 
 
 class ConfigArg:
@@ -296,7 +302,7 @@ def show_config(reload_option: Optional[str]):
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--network-filtered', display='Filter network capture', type='boolflag',
-            tooltip='Capture packets according to the events being traced',
+            tooltip='Capture packets according to the selected scope',
             default='false',
             group=TRACEE_OPTIONS_GROUP
         ),
@@ -304,6 +310,11 @@ def show_config(reload_option: Optional[str]):
             validation='^(default|headers|max|\\d+(b|kb))$',
             default=DEFAULT_SNAPLEN,
             tooltip='Length of captured packets. See the "Forensics" section of Tracee\'s documentation for details',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--packet-injection-interval', display='Packet injection interval', type='integer',
+            default=DEFAULT_PACKET_INJECTION_INTERVAL,
+            tooltip='If capturing packets, inject them into the event stream at an interval given in seconds, or 0 for no packet injection',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--preset', display='Preset', type='selector',
@@ -428,49 +439,67 @@ def show_config(reload_option: Optional[str]):
 
 def show_dlts():
     print("dlt {number=%d}{name=USER0}{display=Tracee event}" % DLT_USER0)
+    print("dlt {number=%d}{name=NULL}{display=Tracee packet}" % DLT_NULL)
 
 
-def get_fake_pcap_header() -> bytearray:
-    header = bytearray()
-    header += struct.pack('<L', int('a1b2c3d4', 16))
-    header += struct.pack('<H', 2)  # Pcap Major Version
-    header += struct.pack('<H', 4)  # Pcap Minor Version
-    header += struct.pack('<I', 0)  # Timezone
-    header += struct.pack('<I', 0)  # Accuracy of timestamps
-    header += struct.pack('<L', 0xffffffff)  # Max Length of capture frame
-    header += struct.pack('<L', DLT_USER0)  # custom Tracee JSON encapsulation
-    return header
-
-
-def parse_ts(event: str) -> int:
-    if not event.startswith(b'{"timestamp":'):
-        raise ValueError(f'invalid event: {event}')
+class DataOutputManager:
+    def __init__(self, extcap_pipe: str):
+        # Initialize the pcapng file that is written to Wireshark's pipe.
+        # Any access to the pipe and writer must be guarded by the lock.
+        self._lock = Lock()
+        self._extcap_pipe_f = open(extcap_pipe, 'wb')
+        self._writer = self._init_pcapng()
     
-    # skip {"timestamp": in the beginning of the event
-    return int(event[13: event.find(b',')])
+    def write_block(self, block: pcapng.blocks.SectionMemberBlock):
+        with self._lock:
+            self._writer.write_block(block)
+            self._extcap_pipe_f.flush()
+    
+    def write_event(self, event: bytes):
+        ts = self._parse_ts(event)
 
+        with self._lock:
+            epb = self._writer.current_section.new_member(
+                pcapng.blocks.EnhancedPacket,
+                timestamp_high = ts >> 32,
+                timestamp_low = ts & 0xffffffff,
+                packet_len = len(event),
+                packet_data = event
+            )
+        
+        self.write_block(epb)
+    
+    def get_current_section(self) -> pcapng.blocks.SectionHeader:
+        with self._lock:
+            return self._writer.current_section
+    
+    def register_interface(self, interface: pcapng.blocks.InterfaceDescription):
+        with self._lock:
+            self._writer.current_section.register_interface(interface)
+    
+    def _init_pcapng(self) -> pcapng.FileWriter:
+        shb = pcapng.blocks.SectionHeader()
 
-def write_event(event: bytes, extcap_pipe: BinaryIO):
-    packet = bytearray()
+        # create interface description for events
+        shb.new_member(
+            pcapng.blocks.InterfaceDescription,
+            link_type=DLT_USER0,
+            options={
+                "if_name": "tracee",
+                "if_description": "Tracee event",
+                "if_tsresol": pcapng.utils.pack_timestamp_resolution(10, 9) # nanoseconds
+            }
+        )
 
-    caplen = len(event)
-    ts = parse_ts(event)
-    timestamp_secs = int(ts / 1000000000)
-    timestamp_usecs = int((ts % 1000000000) / 1000)
-
-    # TODO: temporary workaround for tracee timestamp bug
-    if timestamp_secs < 0 or timestamp_secs > 2**32-1:
-        timestamp_secs = 0
-        timestamp_usecs = 0
-
-    packet += struct.pack('<L', timestamp_secs) # timestamp seconds
-    packet += struct.pack('<L', timestamp_usecs)  # timestamp microseconds
-    packet += struct.pack('<L', caplen)  # length captured
-    packet += struct.pack('<L', caplen)  # length in frame
-
-    packet += event
-
-    extcap_pipe.write(packet)
+        with self._lock:
+            return pcapng.FileWriter(self._extcap_pipe_f, shb)
+    
+    def _parse_ts(self, event: bytes) -> int:
+        if not event.startswith(b'{"timestamp":'):
+            raise ValueError(f'invalid event: {event}')
+        
+        # skip {"timestamp": in the beginning of the event
+        return int(event[13: event.find(b',')])
 
 
 def set_proc_name(newname: str):
@@ -508,7 +537,7 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
 
 
 def stop_capture(is_error: bool = False):
-    global running, container_id, local, args, stopping
+    global running, container_id, local, args, stopping, control_output_manager
 
     if stopping:
         return
@@ -538,7 +567,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
 
-def read_output(extcap_pipe_f: BinaryIO):
+def read_output(data_output_manager: DataOutputManager):
     global running, local
 
     # change our process name so we can exclude it (otherwise it may flood capture with pipe read activity)
@@ -548,9 +577,6 @@ def read_output(extcap_pipe_f: BinaryIO):
     
     # create msgpack unpacker
     unpacker = msgpack.Unpacker(raw=True)
-
-    # write fake PCAP header
-    extcap_pipe_f.write(get_fake_pcap_header())
     
     # open tracee output socket and listen for an incoming connection
     tracee_output_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -582,17 +608,249 @@ def read_output(extcap_pipe_f: BinaryIO):
 
         # unpack any ready events and write them to wireshark's pipe
         for entry in unpacker:
-            write_event(entry[2][b'event'], extcap_pipe_f)
-        try:
-            extcap_pipe_f.flush()
-        # on windows wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the wireshark pipe breaks
-        except OSError:
-            stop_capture()
-            break
+            try:
+                data_output_manager.write_event(entry[2][b'event'])
+            # on Windows Wireshark does not stop the capture gracefully, so we detect that the capture has stopped when the Wireshark pipe breaks
+            except OSError:
+                stop_capture()
+                break
     
     if tracee_output_conn is not None:
         tracee_output_conn.close()
     tracee_output_sock.close()
+
+
+def reader_thread(data_output_manager: DataOutputManager):
+    try:
+        read_output(data_output_manager)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
+
+
+class SFTPManager:
+    def __init__(self, sftp_client: paramiko.SFTPClient):
+        self._sftp_client = sftp_client
+        self._lock = Lock()
+    
+    def copy_dir_from_remote(self, remote_dir: str, local_dir: str) -> Iterator[str]:
+        os.makedirs(local_dir, exist_ok=True)
+
+        for filename in self.listdir(remote_dir):
+            if stat.S_ISDIR(self.stat(f'{remote_dir}/{filename}').st_mode):
+                yield from self.copy_dir_from_remote(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+            else:
+                yield f'{remote_dir}/{filename}'
+                self.get(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+    
+    def get(self, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
+        """
+        Custom implementation of SFTPClient.get(), where the file size obtained from stat()
+        is enforced so that a growing file does not get copied indefinitely.
+        """
+        size_copied = 0
+
+        with open(localpath, 'wb') as fl:
+            with self._lock:
+                file_size = self._sftp_client.stat(remotepath).st_size
+                with self._sftp_client.open(remotepath, 'rb') as fr:
+                    if prefetch:
+                        fr.prefetch(file_size, max_concurrent_prefetch_requests)
+                    
+                    while size_copied < file_size:
+                        data = fr.read(min(32768, file_size - size_copied))
+                        fl.write(data)
+                        size_copied += len(data)
+                        if len(data) == 0:
+                            break
+
+        s = os.stat(localpath)
+        if s.st_size != size_copied:
+            raise IOError(
+                "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
+            )
+    
+    def listdir(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.listdir(*args, **kwargs)
+    
+    def stat(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.stat(*args, **kwargs)
+    
+    def put(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.put(*args, **kwargs)
+    
+    def remove(self, *args, **kwargs):
+        with self._lock:
+            return self._sftp_client.remove(*args, **kwargs)
+    
+    def isdir(self, s):
+        """Return true if the pathname refers to an existing directory.
+        Taken from os.path.isdir().
+        """
+        try:
+            st = self.stat(s)
+        except (OSError, ValueError):
+            return False
+        return stat.S_ISDIR(st.st_mode)
+    
+    def exists(self, path):
+        """Test whether a path exists.  Returns False for broken symbolic links.
+        Taken from is.path.exists().
+        """
+        try:
+            self.stat(path)
+        except (OSError, ValueError):
+            return False
+        return True
+
+
+class PacketInjector:
+    CURRENT_IFACE_ID: int = 1 # start from 1, as interface id 0 is reserved for the events interface
+
+    def __init__(self, data_output_manager: DataOutputManager, sftp: SFTPManager, output_dir: str):
+        self.data_output_manager = data_output_manager
+        self.sftp = sftp
+        self.output_dir = output_dir
+        self._lock = Lock()
+
+        # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
+        self.file_state: Dict[str, Tuple[int, int]] = {}
+    
+    def inject_packets(self, queue: bool = False) -> Iterator[str]:
+        # if a packet injection is already in progress, just do nothing
+        available = self._lock.acquire(blocking=queue)
+        if not available:
+            return
+        
+        try:
+            yield from self._inject_packets()
+        finally:
+            self._lock.release()
+    
+    def _inject_packets(self) -> Iterator[str]:
+        global local
+
+        if local:
+            output_dir = self.output_dir
+            isdir = os.path.isdir
+            exists = os.path.exists
+            listdir = os.listdir
+            inject_packets_from_pcap = self._inject_packets_from_local_pcap
+        else:
+            output_dir = REMOTE_CAPTURE_OUTPUT_DIR
+            isdir = self.sftp.isdir
+            exists = self.sftp.exists
+            listdir = self.sftp.listdir
+            inject_packets_from_pcap = self._inject_packets_from_remote_pcap
+        
+        pcap_dir = self._path_join(output_dir, 'out', 'pcap')
+
+        # if there is a per-process capture, use it as it contains the richest context
+        if isdir(self._path_join(pcap_dir, 'processes')):
+            for container in listdir(self._path_join(pcap_dir, 'processes')):
+                for pcap in listdir(self._path_join(pcap_dir, 'processes', container)):
+                    pid = pcap.split('_')[-2]
+                    comm = '_'.join(pcap.split('_')[:-2]) # don't naively take the first part because process name may contain underscores
+                    yield f'PID {pid} ({comm})'
+                    inject_packets_from_pcap(self._path_join(pcap_dir, 'processes', container, pcap))
+        
+        # the next preferred capture type is per-command
+        elif isdir(self._path_join(pcap_dir, 'commands')):
+            for container in listdir(self._path_join(pcap_dir, 'commands')):
+                for pcap in listdir(self._path_join(pcap_dir, 'commands', container)):
+                    yield f'command {pcap.removesuffix(".pcap")}'
+                    inject_packets_from_pcap(self._path_join(pcap_dir, 'commands', container, pcap))
+        
+        # the next preferred capture type is per-container
+        elif isdir(self._path_join(pcap_dir, 'containers')):
+            for pcap in listdir(self._path_join(pcap_dir, 'containers')):
+                yield f'container {pcap.removesuffix(".pcap")}'
+                inject_packets_from_pcap(self._path_join(pcap_dir, 'containers', pcap))
+        
+        # the least preferred capture type is the single pcap, which doesn't contain any context
+        elif exists(self._path_join(pcap_dir, 'single.pcap')):
+            yield f'single PCAP'
+            inject_packets_from_pcap(self._path_join(pcap_dir, 'single.pcap'))
+    
+    def _path_join(self, *parts) -> str:
+        global local
+
+        if local:
+            return os.path.join(*parts)
+        else:
+            return '/'.join([*parts])
+    
+    def _inject_packets_from_local_pcap(self, pcap_file: str):
+        self._inject_packets_from_pcap(pcap_file, pcap_file)
+    
+    def _inject_packets_from_remote_pcap(self, pcap_file: str):
+        tmp_pcap = os.path.join(TMP_DIR, 'tmp.pcap')
+        self.sftp.get(pcap_file, tmp_pcap)
+        self._inject_packets_from_pcap(tmp_pcap, pcap_file)
+        os.remove(tmp_pcap)
+    
+    def _inject_packets_from_pcap(self, pcap_file: str, pcap_full_path: str):
+        with open(pcap_file, 'rb') as f:
+            scanner = pcapng.FileScanner(f)
+
+            for block in scanner:
+                # don't write section header blocks, as sections cannot be interleaved
+                if isinstance(block, pcapng.blocks.SectionHeader):
+                    continue
+                
+                block.section = self.data_output_manager.get_current_section()
+
+                if isinstance(block, pcapng.blocks.InterfaceDescription):
+                    # we did not encounter this file yet
+                    if pcap_full_path not in self.file_state:
+                        block.interface_id = PacketInjector.CURRENT_IFACE_ID
+                        PacketInjector.CURRENT_IFACE_ID += 1
+                        self.data_output_manager.register_interface(block)
+                        self.file_state[pcap_full_path] = (block.interface_id, 0)
+                    else:
+                        continue
+                
+                elif isinstance(block, pcapng.blocks.EnhancedPacket):
+                    # don't write packets that we already encountered
+                    if block.timestamp <= self.file_state[pcap_full_path][1]:
+                        continue
+
+                    block.interface_id = self.file_state[pcap_full_path][0]
+                    self.file_state[pcap_full_path] = (block.interface_id, block.timestamp)
+                
+                self.data_output_manager.write_block(block)
+
+
+class ControlOutputManager:
+    def __init__(self, control_outf: BinaryIO):
+        self._control_outf = control_outf
+        self._lock = Lock()
+    
+    def disable_button(self, button: int):
+        self._control_write(button, CTRL_CMD_DISABLE, b'')
+    
+    def enable_button(self, button: int):
+        self._control_write(button, CTRL_CMD_ENABLE, b'')
+    
+    def set_button_text(self, button: int, text: str):
+        self._control_write(button, CTRL_CMD_SET, text.encode())
+
+    def _control_write(self, arg: int, cmd: int, payload: bytes):
+        msg = bytearray()
+
+        length = len(payload) + 2
+        high8 = (length >> 16) & 0xff
+        low16 = length & 0xffff
+
+        msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
+        msg += payload
+
+        with self._lock:
+            self._control_outf.write(msg)
+            self._control_outf.flush()
 
 
 def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
@@ -608,48 +866,94 @@ def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
     return arg, cmd, payload
 
 
-def control_write(outf: BinaryIO, arg: int, cmd: int, payload: bytes):
-    msg = bytearray()
-
-    length = len(payload) + 2
-    high8 = (length >> 16) & 0xff
-    low16 = length & 0xffff
-
-    msg += struct.pack('>sBHBB', b'T', high8, low16, arg, cmd)
-    msg += payload
-
-    outf.write(msg)
-    outf.flush()
-
-
-def toolbar_control(control_in: str, control_outf: BinaryIO, output_dir: str):
-    global copy_output, local, sftp_client
+def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
+    global running, copy_output, inject_packets, local
 
     toolbar_copy_output = True
+    toolbar_inject_packets = True
 
-    with open(control_in, 'rb', 0) as inf:
-        while True:
-            try:
-                arg, _, payload = control_read(inf)
-            except OSError:
-                break
-            if arg is None:
-                break
+    while True:
+        try:
+            arg, _, payload = control_read(control_inf)
+        except OSError:
+            break
+        if arg is None:
+            break
+        if not running:
+            break
 
-            if arg == CTRL_ARG_STOP:
-                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_DISABLE, b'')
-                control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Stopping...')
-                copy_output = toolbar_copy_output
-                stop_capture(is_error=False)
-            elif arg == CTRL_ARG_COPY_ON_STOP:
-                toolbar_copy_output = payload == b'\x01'
-            elif arg == CTRL_ARG_COPY_OUTPUT and not local:
-                if sftp_client is not None:
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_DISABLE, b'')
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copying output folder...')
-                    copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_ENABLE, b'')
-                    control_write(control_outf, CTRL_ARG_COPY_OUTPUT, CTRL_CMD_SET, b'Copy output')
+        if arg == CTRL_ARG_STOP:
+            control_output_manager.disable_button(CTRL_ARG_STOP)
+            control_output_manager.set_button_text(CTRL_ARG_STOP, 'Stopping...')
+            copy_output = toolbar_copy_output
+            inject_packets = toolbar_inject_packets
+            stop_capture(is_error=False)
+        
+        elif arg == CTRL_ARG_COPY_ON_STOP:
+            toolbar_copy_output = payload == b'\x01'
+        
+        elif arg == CTRL_ARG_INJECT_PACKETS_ON_STOP:
+            toolbar_inject_packets = payload == b'\x01'
+        
+        elif arg == CTRL_ARG_COPY_OUTPUT and not local:
+            control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
+            for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir):
+                control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copy output')
+            control_output_manager.enable_button(CTRL_ARG_COPY_OUTPUT)
+        
+        elif arg == CTRL_ARG_INJECT_PACKETS:
+            control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
+            
+            for pcap_desc in packet_injector.inject_packets():
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
+            
+            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+            control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
+
+
+def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
+    try:
+        toolbar_control(control_inf, control_output_manager, output_dir, sftp, packet_injector)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
+
+
+def periodic_packet_injector(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
+    global args, running
+
+    # no periodic injection
+    if interval == 0:
+        return
+    
+    # check if we are capturing packets
+    if args.capture_artifacts is None:
+        return
+    if not any(['network' in artifact for artifact in args.capture_artifacts.split(',')]):
+        return
+    
+    sleep(interval)
+
+    while running:
+        control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
+
+        for pcap_desc in packet_injector.inject_packets():
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
+        
+        control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+        control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
+
+        sleep(interval)
+
+
+def packet_injector_thread(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
+    try:
+        periodic_packet_injector(control_output_manager, packet_injector, interval)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
 
 
 def send_local_command(command: str) -> Tuple[str, str, int]:
@@ -678,43 +982,6 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
         raise ValueError('no SSH client provided')
     
     return send_ssh_command(ssh_client, command)
-
-
-def sftp_get(sftp_client: paramiko.SFTPClient, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
-    """
-    Custom implementation of SFTPClient.get(), where the file size obtained from stat()
-    is enforced so that a growing file does not get copied indefinitely.
-    """
-    size_copied = 0
-
-    with open(localpath, 'wb') as fl:
-        file_size = sftp_client.stat(remotepath).st_size
-        with sftp_client.open(remotepath, 'rb') as fr:
-            if prefetch:
-                fr.prefetch(file_size, max_concurrent_prefetch_requests)
-            
-            while size_copied < file_size:
-                data = fr.read(min(32768, file_size - size_copied))
-                fl.write(data)
-                size_copied += len(data)
-                if len(data) == 0:
-                    break
-
-    s = os.stat(localpath)
-    if s.st_size != size_copied:
-        raise IOError(
-            "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
-        )
-
-
-def copy_dir_from_remote(sftp_client: paramiko.SFTPClient, remote_dir: str, local_dir: str):
-    os.makedirs(local_dir, exist_ok=True)
-
-    for filename in sftp_client.listdir(remote_dir):
-        if stat.S_ISDIR(sftp_client.stat(f'{remote_dir}/{filename}').st_mode):
-            copy_dir_from_remote(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
-        else:
-            sftp_get(sftp_client, f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
 
 
 def error(msg: str) -> NoReturn:
@@ -814,7 +1081,7 @@ def prepare_local_capture(args: argparse.Namespace):
     os.chmod(args.output_dir, 0o2775) # g+ws
 
 
-def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp_client: paramiko.SFTPClient) -> int:
+def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp: SFTPManager) -> int:
     # remove preexisting tracee logs file
     if os.path.isdir(args.logfile):
         shutil.rmtree(args.logfile)
@@ -871,7 +1138,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         error(f'error creating output directory for tracee, stderr dump:\n{err}')
     
     # copy new container entrypoint
-    sftp_client.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
     _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
     if returncode != 0:
         error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
@@ -885,7 +1152,14 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id, sftp_client, copy_output
+    global local, running, container_id, copy_output, inject_packets, control_output_manager
+
+    # Open the toolbar control pipes before anything that can fail runs.
+    # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
+    # TODO: the output control pipe should be synchronized (both the toolbar thread and this function can write to it),
+    # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
+    control_outf = open(args.extcap_control_out, 'wb')
+    control_inf = open(args.extcap_control_in, 'rb')
 
     if args.capture_type == 'local':
         local = True
@@ -900,13 +1174,6 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
-    # open toolbar control output pipe
-    control_outf = open(args.extcap_control_out, 'wb')
-
-    # start toolbar control thread
-    control_th = Thread(target=toolbar_control, args=(args.extcap_control_in, control_outf, args.output_dir), daemon=True)
-    control_th.start()
-    
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
@@ -914,6 +1181,7 @@ def tracee_capture(args: argparse.Namespace):
 
     if local:
         ssh_client = None
+        sftp = None
         sshd_pid = None
         prepare_local_capture(args)
     else:
@@ -921,8 +1189,8 @@ def tracee_capture(args: argparse.Namespace):
             ssh_client = ssh_connect(args)
         except TimeoutError:
             error('SSH connection timed out')
-        sftp_client = ssh_client.open_sftp()
-        sshd_pid = prepare_remote_capture(args, ssh_client, sftp_client)
+        sftp = SFTPManager(ssh_client.open_sftp())
+        sshd_pid = prepare_remote_capture(args, ssh_client, sftp)
     
     # remove container from previous run
     if len(args.container_name) > 0:
@@ -930,12 +1198,22 @@ def tracee_capture(args: argparse.Namespace):
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
     
-    # open extcap pipe
-    extcap_pipe_f = open(args.fifo, 'wb')
+    # initialize output managers and packet injector
+    data_output_manager = DataOutputManager(args.fifo)
+    control_output_manager = ControlOutputManager(control_outf)
+    packet_injector = PacketInjector(data_output_manager, sftp, args.output_dir)
+    
+    # start toolbar control thread
+    control_th = Thread(target=toolbar_control, args=(control_inf, control_output_manager, args.output_dir, sftp, packet_injector), daemon=True)
+    control_th.start()
 
     # start reader thread
-    reader_th = Thread(target=read_output, args=(extcap_pipe_f,))
+    reader_th = Thread(target=reader_thread, args=(data_output_manager,))
     reader_th.start()
+
+    # start packet injector thread
+    packet_injector_th = Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
+    packet_injector_th.start()
 
     # run tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
@@ -952,23 +1230,31 @@ def tracee_capture(args: argparse.Namespace):
     
     running = False
 
+    # inject captured packets
+    if inject_packets:
+        for i, pcap_desc in enumerate(packet_injector.inject_packets(queue=True)):
+            # Disable the button only after injection started.
+            # If we were to disable it before this loop, if an injection was already in progress
+            # it would have reenabled the button after we disabled it.
+            if i == 0:
+                control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
+            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
+        control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+
     # copy tracee logs file and output directory
     if not local:
-        sftp_client.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
-        sftp_client.remove(REMOTE_CAPTURE_LOGFILE)
-        sftp_client.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+        sftp.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
+        sftp.remove(REMOTE_CAPTURE_LOGFILE)
+        sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
 
         if copy_output:
-            control_write(control_outf, CTRL_ARG_STOP, CTRL_CMD_SET, b'Copying output folder...')
-            copy_dir_from_remote(sftp_client, REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+            control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
+            control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
+            for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir):
+                control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
-    
-    try:
-        extcap_pipe_f.close()
-    except OSError:
-        pass
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
@@ -976,15 +1262,19 @@ def tracee_capture(args: argparse.Namespace):
         return
     
     # check tracee logs for errors
+    logs_err = ''
     command = f'docker logs {container_id}'
-    _, logs_err, returncode = send_command(local, command, ssh_client)
+    _, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
-        error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
+        if 'dead or marked for removal' not in err:
+            error(f'docker logs returned with error code {returncode}, stderr dump:\n{err}')
+    else:
+        logs_err = err
     
     # remove tracee container
     command = f'docker rm {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
-    if returncode != 0:
+    if returncode != 0 and 'No such container' not in err and 'is already in progress' not in err:
         error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
     
     if len(logs_err) > 0:
@@ -1044,6 +1334,7 @@ def main():
     parser.add_argument('--capture-artifacts', type=str)
     parser.add_argument('--network-filtered', action='store_true', default=False)
     parser.add_argument('--network-snaplen', type=str, default=DEFAULT_SNAPLEN)
+    parser.add_argument('--packet-injection-interval', type=int, default=DEFAULT_PACKET_INJECTION_INTERVAL)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
