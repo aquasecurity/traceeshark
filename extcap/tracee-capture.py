@@ -680,50 +680,92 @@ class SFTPManager:
     def remove(self, *args, **kwargs):
         with self._lock:
             return self._sftp_client.remove(*args, **kwargs)
+    
+    def isdir(self, s):
+        """Return true if the pathname refers to an existing directory.
+        Taken from os.path.isdir().
+        """
+        try:
+            st = self.stat(s)
+        except (OSError, ValueError):
+            return False
+        return stat.S_ISDIR(st.st_mode)
+    
+    def exists(self, path):
+        """Test whether a path exists.  Returns False for broken symbolic links.
+        Taken from is.path.exists().
+        """
+        try:
+            self.stat(path)
+        except (OSError, ValueError):
+            return False
+        return True
 
 
 class PacketInjector:
     CURRENT_IFACE_ID: int = 1 # start from 1, as interface id 0 is reserved for the events interface
 
-    def __init__(self, output_manager: OutputManager, output_dir: str):
+    def __init__(self, output_manager: OutputManager, sftp: SFTPManager, output_dir: str):
         self.output_manager = output_manager
+        self.sftp = sftp
         self.output_dir = output_dir
 
         # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
         self.file_state: Dict[str, Tuple[int, int]] = {}
     
     def inject_packets(self) -> Iterator[str]:
-        pcap_dir = os.path.join(self.output_dir, 'out', 'pcap')
+        global local
+
+        if local:
+            pcap_dir = os.path.join(self.output_dir, 'out', 'pcap')
+            isdir = os.path.isdir
+            exists = os.path.exists
+            listdir = os.listdir
+            inject_packets_from_pcap = self._inject_packets_from_local_pcap
+        else:
+            pcap_dir = os.path.join(REMOTE_CAPTURE_OUTPUT_DIR, 'out', 'pcap')
+            isdir = self.sftp.isdir
+            exists = self.sftp.exists
+            listdir = self.sftp.listdir
+            inject_packets_from_pcap = self._inject_packets_from_remote_pcap
 
         # if there is a per-process capture, use it as it contains the richest context
-        if os.path.isdir(os.path.join(pcap_dir, 'processes')):
-            for container in os.listdir(os.path.join(pcap_dir, 'processes')):
-                for pcap in os.listdir(os.path.join(pcap_dir, 'processes', container)):
+        if isdir(os.path.join(pcap_dir, 'processes')):
+            for container in listdir(os.path.join(pcap_dir, 'processes')):
+                for pcap in listdir(os.path.join(pcap_dir, 'processes', container)):
                     pid = pcap.split('_')[-2]
                     comm = '_'.join(pcap.split('_')[:-2]) # don't naively take the first part because process name may contain underscores
                     yield f'PID {pid} ({comm})'
-                    self._inject_packets_from_pcap(os.path.join(pcap_dir, 'processes', container, pcap))
+                    inject_packets_from_pcap(os.path.join(pcap_dir, 'processes', container, pcap))
         
         # the next preferred capture type is per-command
-        elif os.path.isdir(os.path.join(pcap_dir, 'commands')):
-            for container in os.listdir(os.path.join(pcap_dir, 'commands')):
-                for pcap in os.listdir(os.path.join(pcap_dir, 'commands', container)):
-                    yield f'command {pcap.rstrip(".pcap")}'
-                    self._inject_packets_from_pcap(os.path.join(pcap_dir, 'commands', container, pcap))
+        elif isdir(os.path.join(pcap_dir, 'commands')):
+            for container in listdir(os.path.join(pcap_dir, 'commands')):
+                for pcap in listdir(os.path.join(pcap_dir, 'commands', container)):
+                    yield f'command {pcap.removesuffix(".pcap")}'
+                    inject_packets_from_pcap(os.path.join(pcap_dir, 'commands', container, pcap))
         
         # the next preferred capture type is per-container
-        elif os.path.isdir(os.path.join(pcap_dir, 'containers')):
-            for pcap in os.listdir(os.path.join(pcap_dir, 'containers')):
-                yield f'container {pcap.rstrip(".pcap")}'
-                self._inject_packets_from_pcap(os.path.join(pcap_dir, 'containers', pcap))
+        elif isdir(os.path.join(pcap_dir, 'containers')):
+            for pcap in listdir(os.path.join(pcap_dir, 'containers')):
+                yield f'container {pcap.removesuffix(".pcap")}'
+                inject_packets_from_pcap(os.path.join(pcap_dir, 'containers', pcap))
         
         # the least preferred capture type is the single pcap, which doesn't contain any context
-        elif os.path.exists(os.path.join(pcap_dir, 'single.pcap')):
+        elif exists(os.path.join(pcap_dir, 'single.pcap')):
             yield f'single PCAP'
-            self._inject_packets_from_pcap(os.path.join(pcap_dir, 'single.pcap'))
-
+            inject_packets_from_pcap(os.path.join(pcap_dir, 'single.pcap'))
     
-    def _inject_packets_from_pcap(self, pcap_file: str):
+    def _inject_packets_from_local_pcap(self, pcap_file: str):
+        self._inject_packets_from_pcap(pcap_file, pcap_file)
+    
+    def _inject_packets_from_remote_pcap(self, pcap_file: str):
+        tmp_pcap = os.path.join(TMP_DIR, 'tmp.pcap')
+        self.sftp.get(pcap_file, tmp_pcap)
+        self._inject_packets_from_pcap(tmp_pcap, pcap_file)
+        os.remove(tmp_pcap)
+    
+    def _inject_packets_from_pcap(self, pcap_file: str, pcap_full_path: str):
         with open(pcap_file, 'rb') as f:
             scanner = pcapng.FileScanner(f)
 
@@ -736,21 +778,21 @@ class PacketInjector:
 
                 if isinstance(block, pcapng.blocks.InterfaceDescription):
                     # we did not encounter this file yet
-                    if pcap_file not in self.file_state:
+                    if pcap_full_path not in self.file_state:
                         block.interface_id = PacketInjector.CURRENT_IFACE_ID
                         PacketInjector.CURRENT_IFACE_ID += 1
                         self.output_manager.register_interface(block)
-                        self.file_state[pcap_file] = (block.interface_id, 0)
+                        self.file_state[pcap_full_path] = (block.interface_id, 0)
                     else:
                         continue
                 
                 elif isinstance(block, pcapng.blocks.EnhancedPacket):
                     # don't write packets that we already encountered
-                    if block.timestamp <= self.file_state[pcap_file][1]:
+                    if block.timestamp <= self.file_state[pcap_full_path][1]:
                         continue
 
-                    block.interface_id = self.file_state[pcap_file][0]
-                    self.file_state[pcap_file] = (block.interface_id, block.timestamp)
+                    block.interface_id = self.file_state[pcap_full_path][0]
+                    self.file_state[pcap_full_path] = (block.interface_id, block.timestamp)
                 
                 self.output_manager.write_block(block)
 
@@ -812,10 +854,6 @@ def toolbar_control(control_inf: BinaryIO, control_outf: BinaryIO, output_dir: s
         
         elif arg == CTRL_ARG_INJECT_PACKETS:
             control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_DISABLE, b'')
-
-            if not local:
-                control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, b'Remote captures not yet supported!')
-                continue
             
             for pcap_desc in packet_injector.inject_packets():
                 control_write(control_outf, CTRL_ARG_INJECT_PACKETS, CTRL_CMD_SET, f'Injecting packets from {pcap_desc}...'.encode())
@@ -1076,7 +1114,7 @@ def tracee_capture(args: argparse.Namespace):
     
     # initialize output manager and packet injector
     output_manager = OutputManager(args.fifo)
-    packet_injector = PacketInjector(output_manager, args.output_dir)
+    packet_injector = PacketInjector(output_manager, sftp, args.output_dir)
     
     # start toolbar control thread
     control_th = Thread(target=toolbar_control, args=(control_inf, control_outf, args.output_dir, sftp, packet_injector), daemon=True)
