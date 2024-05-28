@@ -633,13 +633,14 @@ class SFTPManager:
         self._sftp_client = sftp_client
         self._lock = Lock()
     
-    def copy_dir_from_remote(self, remote_dir: str, local_dir: str):
+    def copy_dir_from_remote(self, remote_dir: str, local_dir: str) -> Iterator[str]:
         os.makedirs(local_dir, exist_ok=True)
 
         for filename in self.listdir(remote_dir):
             if stat.S_ISDIR(self.stat(f'{remote_dir}/{filename}').st_mode):
-                self.copy_dir_from_remote(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
+                yield from self.copy_dir_from_remote(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
             else:
+                yield f'{remote_dir}/{filename}'
                 self.get(f'{remote_dir}/{filename}', os.path.join(local_dir, filename))
     
     def get(self, remotepath: str, localpath: str, prefetch=True, max_concurrent_prefetch_requests=None):
@@ -897,18 +898,19 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
         elif arg == CTRL_ARG_COPY_OUTPUT and not local:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
-            sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir)
-            control_output_manager.enable_button(CTRL_ARG_COPY_OUTPUT)
+            for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir):
+                control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copy output')
+            control_output_manager.enable_button(CTRL_ARG_COPY_OUTPUT)
         
         elif arg == CTRL_ARG_INJECT_PACKETS:
             control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
             
             for pcap_desc in packet_injector.inject_packets():
-                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
             
-            control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
             control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+            control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
 
 
 def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
@@ -928,10 +930,8 @@ def periodic_packet_injector(control_output_manager: ControlOutputManager, packe
     
     # check if we are capturing packets
     if args.capture_artifacts is None:
-        sys.stderr.write('not capturing anything\n')
         return
     if not any(['network' in artifact for artifact in args.capture_artifacts.split(',')]):
-        sys.stderr.write('not capturing packets\n')
         return
     
     sleep(interval)
@@ -940,10 +940,10 @@ def periodic_packet_injector(control_output_manager: ControlOutputManager, packe
         control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
 
         for pcap_desc in packet_injector.inject_packets():
-                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
-            
-        control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
+        
         control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+        control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
 
         sleep(interval)
 
@@ -1238,7 +1238,7 @@ def tracee_capture(args: argparse.Namespace):
             # it would have reenabled the button after we disabled it.
             if i == 0:
                 control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
-            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
+            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
         control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
 
     # copy tracee logs file and output directory
@@ -1250,7 +1250,8 @@ def tracee_capture(args: argparse.Namespace):
         if copy_output:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
-            sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
+            for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir):
+                control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
