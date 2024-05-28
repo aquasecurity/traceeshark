@@ -733,44 +733,54 @@ class PacketInjector:
         global local
 
         if local:
-            pcap_dir = os.path.join(self.output_dir, 'out', 'pcap')
+            output_dir = self.output_dir
             isdir = os.path.isdir
             exists = os.path.exists
             listdir = os.listdir
             inject_packets_from_pcap = self._inject_packets_from_local_pcap
         else:
-            pcap_dir = os.path.join(REMOTE_CAPTURE_OUTPUT_DIR, 'out', 'pcap')
+            output_dir = REMOTE_CAPTURE_OUTPUT_DIR
             isdir = self.sftp.isdir
             exists = self.sftp.exists
             listdir = self.sftp.listdir
             inject_packets_from_pcap = self._inject_packets_from_remote_pcap
+        
+        pcap_dir = self._path_join(output_dir, 'out', 'pcap')
 
         # if there is a per-process capture, use it as it contains the richest context
-        if isdir(os.path.join(pcap_dir, 'processes')):
-            for container in listdir(os.path.join(pcap_dir, 'processes')):
-                for pcap in listdir(os.path.join(pcap_dir, 'processes', container)):
+        if isdir(self._path_join(pcap_dir, 'processes')):
+            for container in listdir(self._path_join(pcap_dir, 'processes')):
+                for pcap in listdir(self._path_join(pcap_dir, 'processes', container)):
                     pid = pcap.split('_')[-2]
                     comm = '_'.join(pcap.split('_')[:-2]) # don't naively take the first part because process name may contain underscores
                     yield f'PID {pid} ({comm})'
-                    inject_packets_from_pcap(os.path.join(pcap_dir, 'processes', container, pcap))
+                    inject_packets_from_pcap(self._path_join(pcap_dir, 'processes', container, pcap))
         
         # the next preferred capture type is per-command
-        elif isdir(os.path.join(pcap_dir, 'commands')):
-            for container in listdir(os.path.join(pcap_dir, 'commands')):
-                for pcap in listdir(os.path.join(pcap_dir, 'commands', container)):
+        elif isdir(self._path_join(pcap_dir, 'commands')):
+            for container in listdir(self._path_join(pcap_dir, 'commands')):
+                for pcap in listdir(self._path_join(pcap_dir, 'commands', container)):
                     yield f'command {pcap.removesuffix(".pcap")}'
-                    inject_packets_from_pcap(os.path.join(pcap_dir, 'commands', container, pcap))
+                    inject_packets_from_pcap(self._path_join(pcap_dir, 'commands', container, pcap))
         
         # the next preferred capture type is per-container
-        elif isdir(os.path.join(pcap_dir, 'containers')):
-            for pcap in listdir(os.path.join(pcap_dir, 'containers')):
+        elif isdir(self._path_join(pcap_dir, 'containers')):
+            for pcap in listdir(self._path_join(pcap_dir, 'containers')):
                 yield f'container {pcap.removesuffix(".pcap")}'
-                inject_packets_from_pcap(os.path.join(pcap_dir, 'containers', pcap))
+                inject_packets_from_pcap(self._path_join(pcap_dir, 'containers', pcap))
         
         # the least preferred capture type is the single pcap, which doesn't contain any context
-        elif exists(os.path.join(pcap_dir, 'single.pcap')):
+        elif exists(self._path_join(pcap_dir, 'single.pcap')):
             yield f'single PCAP'
-            inject_packets_from_pcap(os.path.join(pcap_dir, 'single.pcap'))
+            inject_packets_from_pcap(self._path_join(pcap_dir, 'single.pcap'))
+    
+    def _path_join(self, *parts) -> str:
+        global local
+
+        if local:
+            return os.path.join(*parts)
+        else:
+            return '/'.join([*parts])
     
     def _inject_packets_from_local_pcap(self, pcap_file: str):
         self._inject_packets_from_pcap(pcap_file, pcap_file)
