@@ -71,8 +71,9 @@ CTRL_CMD_ERROR       = 9
 # corresponds to the toolbar buttons, 0 is reserved for sending CTRL_CMD_INITIALIZED
 CTRL_ARG_STOP           = 1
 CTRL_ARG_COPY_ON_STOP   = 2
-CTRL_ARG_COPY_OUTPUT    = 3
-CTRL_ARG_INJECT_PACKETS = 4
+CTRL_ARG_INJECT_PACKETS_ON_STOP = 3
+CTRL_ARG_COPY_OUTPUT    = 4
+CTRL_ARG_INJECT_PACKETS = 5
 
 
 args: argparse.Namespace = None
@@ -81,6 +82,7 @@ running: bool = True
 local: bool = True
 stopping: bool = False
 copy_output: bool = False
+inject_packets: bool = False
 control_output_manager: 'ControlOutputManager' = None
 
 
@@ -92,7 +94,8 @@ def show_interfaces():
     print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
     print("interface {value=tracee}{display=Tracee capture}")
     print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
-    print("control {number=%d}{type=boolean}{display=Copy on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=boolean}{display=Copy output on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
+    print("control {number=%d}{type=boolean}{display=Inject packets on stop}{default=true}{tooltip=Inject packets when stopping the capture}" % CTRL_ARG_INJECT_PACKETS_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
     print("control {number=%d}{type=button}{display=Inject packets}{tooltip=Inject packets captured by Tracee into the capture stream}" % CTRL_ARG_INJECT_PACKETS)
 
@@ -715,9 +718,9 @@ class PacketInjector:
         # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
         self.file_state: Dict[str, Tuple[int, int]] = {}
     
-    def inject_packets(self) -> Iterator[str]:
+    def inject_packets(self, queue: bool = False) -> Iterator[str]:
         # if a packet injection is already in progress, just do nothing
-        available = self._lock.acquire(blocking=False)
+        available = self._lock.acquire(blocking=queue)
         if not available:
             return
         
@@ -853,9 +856,10 @@ def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
 
 
 def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
-    global running, copy_output, local
+    global running, copy_output, inject_packets, local
 
     toolbar_copy_output = True
+    toolbar_inject_packets = True
 
     while True:
         try:
@@ -871,10 +875,14 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
             control_output_manager.disable_button(CTRL_ARG_STOP)
             control_output_manager.set_button_text(CTRL_ARG_STOP, 'Stopping...')
             copy_output = toolbar_copy_output
+            inject_packets = toolbar_inject_packets
             stop_capture(is_error=False)
         
         elif arg == CTRL_ARG_COPY_ON_STOP:
             toolbar_copy_output = payload == b'\x01'
+        
+        elif arg == CTRL_ARG_INJECT_PACKETS_ON_STOP:
+            toolbar_inject_packets = payload == b'\x01'
         
         elif arg == CTRL_ARG_COPY_OUTPUT and not local:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
@@ -1134,7 +1142,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
 
 
 def tracee_capture(args: argparse.Namespace):
-    global local, running, container_id, copy_output, control_output_manager
+    global local, running, container_id, copy_output, inject_packets, control_output_manager
 
     # Open the toolbar control pipes before anything that can fail runs.
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
@@ -1211,6 +1219,17 @@ def tracee_capture(args: argparse.Namespace):
         error(f'docker wait returned with error code {returncode}, stderr dump:\n{err}')
     
     running = False
+
+    # inject captured packets
+    if inject_packets:
+        for i, pcap_desc in enumerate(packet_injector.inject_packets(queue=True)):
+            # Disable the button only after injection started.
+            # If we were to disable it before this loop, if an injection was already in progress
+            # it would have reenabled the button after we disabled it.
+            if i == 0:
+                control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
+            control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
+        control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
 
     # copy tracee logs file and output directory
     if not local:
