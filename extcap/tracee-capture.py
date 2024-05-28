@@ -54,6 +54,7 @@ DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
 DEFAULT_SNAPLEN = 'default'
+DEFAULT_PACKET_INJECTION_INTERVAL = 30
 
 # corresponds to "enum InterfaceControlCommand" from wireshark/ui/qt/interface_toolbar.cpp
 CTRL_CMD_INITIALIZED = 0
@@ -298,7 +299,7 @@ def show_config(reload_option: Optional[str]):
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--network-filtered', display='Filter network capture', type='boolflag',
-            tooltip='Capture packets according to the events being traced',
+            tooltip='Capture packets according to the selected scope',
             default='false',
             group=TRACEE_OPTIONS_GROUP
         ),
@@ -306,6 +307,11 @@ def show_config(reload_option: Optional[str]):
             validation='^(default|headers|max|\\d+(b|kb))$',
             default=DEFAULT_SNAPLEN,
             tooltip='Length of captured packets. See the "Forensics" section of Tracee\'s documentation for details',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--packet-injection-interval', display='Packet injection interval', type='integer',
+            default=DEFAULT_PACKET_INJECTION_INTERVAL,
+            tooltip='If capturing packets, inject them into the event stream at an interval given in seconds, or 0 for no packet injection',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--preset', display='Preset', type='selector',
@@ -536,11 +542,6 @@ def stop_capture(is_error: bool = False):
     stopping = True
     running = False
 
-    # disable toolbar buttons
-    control_output_manager.disable_button(CTRL_ARG_STOP)
-    control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
-    control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
-
     if container_id is not None:
         ssh_client = None
         if not local:
@@ -709,11 +710,23 @@ class PacketInjector:
         self.data_output_manager = data_output_manager
         self.sftp = sftp
         self.output_dir = output_dir
+        self._lock = Lock()
 
         # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
         self.file_state: Dict[str, Tuple[int, int]] = {}
     
     def inject_packets(self) -> Iterator[str]:
+        # if a packet injection is already in progress, just do nothing
+        available = self._lock.acquire(blocking=False)
+        if not available:
+            return
+        
+        try:
+            yield from self._inject_packets()
+        finally:
+            self._lock.release()
+    
+    def _inject_packets(self) -> Iterator[str]:
         global local
 
         if local:
@@ -840,7 +853,7 @@ def control_read(inf: BinaryIO) -> Tuple[int, int, bytes]:
 
 
 def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
-    global copy_output, local
+    global running, copy_output, local
 
     toolbar_copy_output = True
 
@@ -851,8 +864,11 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
             break
         if arg is None:
             break
+        if not running:
+            break
 
         if arg == CTRL_ARG_STOP:
+            control_output_manager.disable_button(CTRL_ARG_STOP)
             control_output_manager.set_button_text(CTRL_ARG_STOP, 'Stopping...')
             copy_output = toolbar_copy_output
             stop_capture(is_error=False)
@@ -880,6 +896,43 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
 def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
     try:
         toolbar_control(control_inf, control_output_manager, output_dir, sftp, packet_injector)
+    except Exception:
+        stop_capture(is_error=True)
+        raise
+
+
+def periodic_packet_injector(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
+    global args, running
+
+    # no periodic injection
+    if interval == 0:
+        return
+    
+    # check if we are capturing packets
+    if args.capture_artifacts is None:
+        sys.stderr.write('not capturing anything\n')
+        return
+    if not any(['network' in artifact for artifact in args.capture_artifacts.split(',')]):
+        sys.stderr.write('not capturing packets\n')
+        return
+    
+    sleep(interval)
+
+    while running:
+        control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
+
+        for pcap_desc in packet_injector.inject_packets():
+                control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}...')
+            
+        control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
+        control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
+
+        sleep(interval)
+
+
+def packet_injector_thread(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
+    try:
+        periodic_packet_injector(control_output_manager, packet_injector, interval)
     except Exception:
         stop_capture(is_error=True)
         raise
@@ -1140,6 +1193,10 @@ def tracee_capture(args: argparse.Namespace):
     reader_th = Thread(target=reader_thread, args=(data_output_manager,))
     reader_th.start()
 
+    # start packet injector thread
+    packet_injector_th = Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
+    packet_injector_th.start()
+
     # run tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
     out, err, returncode = send_command(local, command, ssh_client)
@@ -1162,6 +1219,7 @@ def tracee_capture(args: argparse.Namespace):
         sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
 
         if copy_output:
+            control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
             sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir)
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
@@ -1246,6 +1304,7 @@ def main():
     parser.add_argument('--capture-artifacts', type=str)
     parser.add_argument('--network-filtered', action='store_true', default=False)
     parser.add_argument('--network-snaplen', type=str, default=DEFAULT_SNAPLEN)
+    parser.add_argument('--packet-injection-interval', type=int, default=DEFAULT_PACKET_INJECTION_INTERVAL)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
     parser.add_argument('--preset-from-file', type=str)
