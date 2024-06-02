@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to be released, e.g. v0.1.0
+        required: true
+      release_body:
+        description: Description of the release
+        required: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        wireshark_version: [wireshark-4.2.5]
+        include:
+          # Ubuntu 22.04 Wireshark version
+          - os: ubuntu-latest
+            wireshark_version: wireshark-3.6.2
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.tag }}
+    
+    - name: Clone Wireshark
+      run: git clone --depth 1 --branch ${{ matrix.wireshark_version }} https://github.com/wireshark/wireshark
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt update
+        sudo apt install -y ninja-build
+        sudo wireshark/tools/debian-setup.sh
+    
+    - name: Install Wireshark headers (Unix)
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+      uses: ./.github/actions/install-wireshark-headers
+    
+    - name: Build Traceeshark (Unix)
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+      run: |
+        make cmake
+        make
+    
+    - name: Create distribution archive (Unix)
+      id: create_dist
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+      run: |
+        make dist
+        DIST_PATH=$(ls dist/*.zip | head -n 1)
+        DIST_NAME=$(basename $DIST_PATH)
+        echo "::set-output name=dist_archive::$DIST_NAME"
+    
+    - name: Create GitHub release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.event.inputs.tag }}
+        release_name: ${{ github.event.inputs.tag }}
+        body: ${{ github.event.inputs.release_body }}
+        draft: true
+        prerelease: true
+
+    - name: Upload distribution archive
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: dist/${{ steps.create_dist.outputs.dist_archive }}
+        asset_name: ${{ steps.create_dist.outputs.dist_archive }}
+        asset_content_type: application/zip
