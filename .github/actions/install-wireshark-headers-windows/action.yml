@@ -1,0 +1,17 @@
+name: Install Wireshark headers (Windows)
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure Wireshark
+      run: |
+        mkdir build
+        cd build
+        set WIRESHARK_BASE_DIR=..\
+        set WIRESHARK_QT6_PREFIX_PATH=$QT_ROOT_DIR
+        cmake -G "Visual Studio 17 2022" -A x64 ..\wireshark
+      shell: cmd
+    - name: Install headers
+      run: |
+        cd build
+        msbuild install-headers.vcxproj
+      shell: cmd
