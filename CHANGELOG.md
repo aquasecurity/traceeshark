@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.2
+
+Added:
+
+- Live capture
+  
+  - Remove container from previous run
+  
+  - Add configuration for capturing artifacts
+  
+  - Added toolbar for controlling the capture
+  
+  - Remote capture - copy artifacts from remote machine on demand and on capture stop
+  
+  - Inject captured packets into event stream on demand, periodically, and on capture stop
+
+- Added GitHub workflow for automatic builds across all platforms
+
+Fixed:
+
+- Live capture bugfixes
+
 ## v0.2.1
 
 Changed:
