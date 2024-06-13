@@ -33,7 +33,7 @@ Now the plugins should be available using your installed Wireshark.
 To use live capture, a few python libraries must be installed:
 
 ```
-pip3 install paramiko msgpack pcapng
+pip3 install paramiko msgpack python-pcapng
 ```
 
 Additionally, the user must be able to run docker containers.
