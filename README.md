@@ -2,29 +2,29 @@
 
 ## Installation
 
-Traceeshark can be installed using an archive containing the plugins and other required files.
+First, make sure you have Wireshark installed and updated to the latest version.
 
-Archives are available in the downloads section. Installations are per Wireshark version and may not work with other versions. Download the appropriate archive and unzip it.
+Then, simply run the following command:
 
-On Linux and Mac:
+**Windows (powershell)**
+
+```powershell
+$outFile = [System.IO.Path]::GetTempFileName() ; Invoke-WebRequest -Uri "https://raw.githubusercontent.com/aquasecurity/traceeshark/main/autoinstall.py" -OutFile $outFile ; python.exe $outFile ; rm $outFile
+```
+
+**Linux/Mac**
 
 ```bash
-unzip -d <destination folder> <archive>
+outfile=$(mktemp) && curl -s "https://raw.githubusercontent.com/aquasecurity/traceeshark/main/autoinstall.py" > $outfile && python3 $outfile && rm $outfile
 ```
 
-Run the install script. On Windows:
+#### Manual installation
 
-```batch
-powershell -executionpolicy bypass -File .\install.ps1
-```
+Traceeshark can be installed using a release containing the plugins and other required files.
 
-On Linux:
+Installations are per Wireshark version and may not work with other versions. Download the appropriate release, unzip it, and run the installation script (`install.ps1` on Windows and `install.sh` on Linux/Mac)
 
-```bash
-cd <destination folder>
-chmod +x install.sh
-./install.sh
-```
+:warning: The installation scripts must be run from within their directory
 
 Now the plugins should be available using your installed Wireshark.
 
