@@ -136,4 +136,4 @@ dist: all
 	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))
 	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
 	
-	@cd dist/workdir && zip -r ../traceeshark-v$(TRACEESHARK_VERSION)-wireshark-$(WS_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m).zip .
+	@cd dist/workdir && zip -r ../traceeshark-v$(TRACEESHARK_VERSION)-$(shell echo "${OS_NAME}" | tr '[A-Z]' '[a-z]')-$(shell uname -m)-wireshark-$(WS_VERSION).zip .
