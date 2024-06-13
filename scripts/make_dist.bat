@@ -20,6 +20,6 @@ for /f "tokens=2" %%a in ('build\run\RelWithDebInfo\wireshark.exe --version ^| f
 )
 echo %WS_VERSION% > dist\workdir\ws_version.txt
 
-powershell Compress-Archive -Update -Path dist\workdir\* -DestinationPath dist\traceeshark-v%TRACEESHARK_VERSION%-wireshark-%WS_VERSION%-windows-x86_64.zip
+powershell Compress-Archive -Update -Path dist\workdir\* -DestinationPath dist\traceeshark-v%TRACEESHARK_VERSION%-windows-x86_64-wireshark-%WS_VERSION%.zip
 
 endlocal

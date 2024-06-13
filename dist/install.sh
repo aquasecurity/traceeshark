@@ -20,7 +20,6 @@ mkdir -p ~/.config/wireshark/profiles
 cp -r profiles/Tracee ~/.config/wireshark/profiles/
 echo "[*] Installed profile to ~/.config/wireshark/profiles/Tracee"
 
-#WS_VERSION_SHORT=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
 WS_VERSION_SHORT=$(echo $WS_VERSION_EXISTS | grep -o -E "[0-9]+\.[0-9]+")
 if [[ $WS_VERSION_SHORT < "4.3" ]]; then
     OS_NAME=$(uname -s)

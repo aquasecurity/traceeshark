@@ -40,6 +40,9 @@ jobs:
           # Ubuntu 22.04 Wireshark package version
           - os: ubuntu-latest
             wireshark_version: wireshark-3.6.2
+          # Ubuntu 24.04 Wireshark package version
+          - os: ubuntu-latest
+            wireshark_version: wireshark-4.2.2
     
     steps:
     - name: Checkout code
