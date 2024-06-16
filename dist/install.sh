@@ -16,9 +16,9 @@ else
     fi
 fi
 
-mkdir -p ~/.config/wireshark/profiles
-cp -r profiles/Tracee ~/.config/wireshark/profiles/
-echo "[*] Installed profile to ~/.config/wireshark/profiles/Tracee"
+mkdir -p $HOME/.config/wireshark/profiles
+cp -r profiles/Tracee $HOME/.config/wireshark/profiles/
+echo "[*] Installed profile to $HOME/.config/wireshark/profiles/Tracee"
 
 WS_VERSION_SHORT=$(echo $WS_VERSION_EXISTS | grep -o -E "[0-9]+\.[0-9]+")
 if [[ $WS_VERSION_SHORT < "4.3" ]]; then
@@ -28,9 +28,9 @@ if [[ $WS_VERSION_SHORT < "4.3" ]]; then
     else
         WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
     fi
-    PLUGINS_DIR="~/.local/lib/wireshark/plugins/$WS_VERSION_DIR"
+    PLUGINS_DIR="$HOME/.local/lib/wireshark/plugins/$WS_VERSION_DIR"
 else
-    PLUGINS_DIR="~/.local/lib/wireshark/plugins"
+    PLUGINS_DIR="$HOME/.local/lib/wireshark/plugins"
 fi
 
 mkdir -p $PLUGINS_DIR/epan
@@ -41,9 +41,9 @@ cp tracee-json.so* $PLUGINS_DIR/wiretap
 echo "[*] Installed plugins to $PLUGINS_DIR"
 
 if [[ $WS_VERSION_SHORT < "4.1" ]]; then
-    EXTCAP_DIR="~/.config/wireshark/extcap"
+    EXTCAP_DIR="$HOME/.config/wireshark/extcap"
 else
-    EXTCAP_DIR="~/.local/lib/wireshark/extcap"
+    EXTCAP_DIR="$HOME/.local/lib/wireshark/extcap"
 fi
 
 mkdir -p $EXTCAP_DIR
