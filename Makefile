@@ -128,6 +128,12 @@ dist: all
 	else \
 		cp wireshark/build/run/tracee-json.so* dist/workdir; \
 	fi
+
+	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+		scripts/macos_rpathify.sh dist/workdir/tracee-json.so; \
+		scripts/macos_rpathify.sh dist/workdir/tracee-event.so; \
+		scripts/macos_rpathify.sh dist/workdir/tracee-network-capture.so; \
+	fi
 	
 	@cp -r profiles dist/workdir
 	@cp -r extcap dist/workdir
