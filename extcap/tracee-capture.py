@@ -1160,6 +1160,8 @@ def tracee_capture(args: argparse.Namespace):
     # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
     control_outf = open(args.extcap_control_out, 'wb')
     control_inf = open(args.extcap_control_in, 'rb')
+    # sleep to let Wireshark's initial message to arrive, otherwise Wireshark displays an error if we immediately exit and don't receive the message
+    sleep(0.1)
 
     if args.capture_type == 'local':
         local = True
@@ -1173,6 +1175,9 @@ def tracee_capture(args: argparse.Namespace):
     
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
+    
+    if not args.remote_host:
+        error('no remote host specified')
     
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
