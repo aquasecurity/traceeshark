@@ -24,6 +24,7 @@ jobs:
         tag_name: ${{ github.event.inputs.tag }}
         release_name: ${{ github.event.inputs.tag }}
         body: ${{ github.event.inputs.release_body }}
+        draft: true
     outputs:
       upload_url: ${{ steps.create-release.outputs.upload_url }}
 
@@ -45,6 +46,10 @@ jobs:
             wireshark_version: wireshark-4.2.2
     
     steps:
+    - name: Disable auto CRLF (Windows)
+      if: matrix.os == 'windows-latest'
+      run: git config --global core.autocrlf false
+    
     - name: Checkout code
       uses: actions/checkout@v4
       with:
