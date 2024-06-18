@@ -1156,10 +1156,13 @@ def tracee_capture(args: argparse.Namespace):
 
     # Open the toolbar control pipes before anything that can fail runs.
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
-    # TODO: the output control pipe should be synchronized (both the toolbar thread and this function can write to it),
-    # but it is very unlikely that any concurrent access will occur (this function writes to the pipe only when the capture is stopped).
     control_outf = open(args.extcap_control_out, 'wb')
     control_inf = open(args.extcap_control_in, 'rb')
+
+    # Initialize the output before anything that can fail runs. This is done because Wireshark enters
+    # a corrupt state if the extcap dies before a pcap/pcapng header was written to the output pipe.
+    data_output_manager = DataOutputManager(args.fifo)
+
     # sleep to let Wireshark's initial message to arrive, otherwise Wireshark displays an error if we immediately exit and don't receive the message
     sleep(0.1)
 
@@ -1203,8 +1206,7 @@ def tracee_capture(args: argparse.Namespace):
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
     
-    # initialize output managers and packet injector
-    data_output_manager = DataOutputManager(args.fifo)
+    # initialize control output manager and packet injector
     control_output_manager = ControlOutputManager(control_outf)
     packet_injector = PacketInjector(data_output_manager, sftp, args.output_dir)
     
@@ -1372,6 +1374,7 @@ def main():
 if __name__ == '__main__':
     #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
     #sys.stderr.write(f'{sys.argv}\n')
+    #sys.stderr.flush()
     try:
         main()
     # RuntimeError is raised by the error() function which already printed
