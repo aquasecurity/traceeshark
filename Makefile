@@ -48,14 +48,24 @@ install:
 	@mkdir -p ~/.local/lib/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py
-	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py
+	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+		cp extcap/tracee-capture.sh ~/.local/lib/wireshark/extcap; \
+		chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.sh; \
+	else \
+		chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py; \
+	fi
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
 	@chmod +x ~/.local/lib/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
 	@mkdir -p ~/.config/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py
-	@chmod +x ~/.config/wireshark/extcap/tracee-capture.py
+	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+		cp extcap/tracee-capture.sh ~/.config/wireshark/extcap; \
+		chmod +x ~/.config/wireshark/extcap/tracee-capture.sh; \
+	else \
+		chmod +x ~/.config/wireshark/extcap/tracee-capture.py; \
+	fi
 	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
 	@chmod +x ~/.config/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
@@ -137,6 +147,12 @@ dist: all
 	
 	@cp -r profiles dist/workdir
 	@cp -r extcap dist/workdir
+
+	@rm dist/workdir/extcap/tracee-capture.bat
+	@if [ "$(OS_NAME)" == "Linux" ]; then \
+		rm dist/workdir/extcap/tracee-capture.sh; \
+	fi
+
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' dist/workdir/extcap/tracee-capture.py
 
 	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))

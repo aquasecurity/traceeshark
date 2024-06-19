@@ -1,5 +1,6 @@
 #!/bin/bash
 
+OS_NAME=$(uname -s)
 WS_VERSION_WANTED=$(cat ws_version.txt | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+")
 if command -v "wireshark" &> /dev/null; then
     WS_VERSION_EXISTS=$(wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+")
@@ -22,7 +23,6 @@ echo "[*] Installed profile to $HOME/.config/wireshark/profiles/Tracee"
 
 WS_VERSION_SHORT=$(echo $WS_VERSION_EXISTS | grep -o -E "[0-9]+\.[0-9]+")
 if [[ $WS_VERSION_SHORT < "4.3" ]]; then
-    OS_NAME=$(uname -s)
     if [ "$OS_NAME" == "Linux" ]; then
         WS_VERSION_DIR=$WS_VERSION_SHORT
     else
@@ -48,7 +48,12 @@ fi
 
 mkdir -p $EXTCAP_DIR
 cp extcap/tracee-capture.py $EXTCAP_DIR
-chmod +x $EXTCAP_DIR/tracee-capture.py
+if [ "$OS_NAME" == "Linux" ]; then
+    chmod +x $EXTCAP_DIR/tracee-capture.py
+else
+    cp extcap/tracee-capture.sh $EXTCAP_DIR
+    chmod +x $EXTCAP_DIR/tracee-capture.sh
+fi
 cp -r extcap/tracee-capture $EXTCAP_DIR
 chmod +x $EXTCAP_DIR/tracee-capture/new-entrypoint.sh
 echo "[*] Installed extcap to $EXTCAP_DIR"
