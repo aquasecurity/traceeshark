@@ -249,6 +249,8 @@ static wmem_map_t *event_dynamic_hf_map;
  */
 static wmem_map_t *complex_type_dissectors;
 
+dissector_handle_t ip_dissector;
+
 static void dissect_arguments(tvbuff_t *, packet_info *, proto_tree *, gchar *,
     jsmntok_t *, const gchar *, gboolean, struct tracee_dissector_data *);
 
@@ -1858,6 +1860,24 @@ static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *p
         wmem_strdup_printf(wmem_packet_scope(), "%s.triggered_by", event_name), FALSE, data);
 }
 
+/**
+ * Copied from wireshark/epan/tvbuff_base64.c
+ * Original function does not have WS_DLL_PUBLIC declared.
+ */
+tvbuff_t * base64_to_tvb(tvbuff_t *parent, const char *base64)
+{
+    tvbuff_t *tvb;
+    char *data;
+    gsize len;
+
+    data = g_base64_decode(base64, &len);
+    tvb = tvb_new_child_real_data(parent, (const guint8 *)data, (gint)len, (gint)len);
+
+    tvb_set_free_cb(tvb, g_free);
+
+    return tvb;
+}
+
 static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data,
     jsmntok_t *root_tok, const gchar *event_name, gboolean set_info, struct tracee_dissector_data *data)
 {
@@ -1964,6 +1984,13 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
                         }
                     }
                     proto_tree_add_string_wanted(args_tree, *(hf->p_id), tvb, 0, 0, arg_str);
+
+                    // special case of net_packet_raw which contains packet data
+                    if (strcmp(event_name, "net_packet_raw") == 0 && strcmp(hf->hfinfo.name, "data") == 0) {
+                            data->packet_tvb = base64_to_tvb(tvb, arg_str);
+                            add_new_data_source(pinfo, data->packet_tvb, "Network Packet");
+                    }
+
                     break;
                 
                 // unsupported or unknown types
@@ -2062,14 +2089,14 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
     return signature_name;
 }
 
-static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     proto_item *item, gchar *json_data, struct tracee_dissector_data *data)
 {
     int num_toks;
     jsmntok_t *root_tok;
     gint64 event_id, tmp_int;
     nstime_t timestamp;
-    gchar *event_name, *syscall, *signature_name, *tmp_str;
+    gchar *syscall, *signature_name, *tmp_str;
     proto_item *tmp_item;
     gboolean is_signature;
 
@@ -2099,17 +2126,15 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     proto_tree_add_int64(tree, hf_event_id, tvb, 0, 0, event_id);
 
     // add event name
-    DISSECTOR_ASSERT((event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(event_name) > 0);
-    proto_tree_add_string_wanted(tree, hf_event_name, tvb, 0, 0, event_name);
-    data->event_name = event_name;
-    if (strlen(event_name) > 0)
-        proto_item_append_text(item, ": %s", event_name);
+    DISSECTOR_ASSERT((data->event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(data->event_name) > 0);
+    proto_tree_add_string_wanted(tree, hf_event_name, tvb, 0, 0, data->event_name);
+    proto_item_append_text(item, ": %s", data->event_name);
     
     // check if event is a signature
     is_signature = FALSE;
     if (event_id >= START_SIGNATURE_ID && event_id <= MAX_SIGNATURE_ID)
         is_signature = TRUE;
-    else if (strncmp(event_name, "sig_", 4) == 0)
+    else if (strncmp(data->event_name, "sig_", 4) == 0)
         is_signature = TRUE;
     tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, is_signature);
     proto_item_set_generated(tmp_item);
@@ -2132,13 +2157,11 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     proto_tree_add_string(tree, hf_syscall, tvb, 0, 0, syscall);
     
     // add arguments
-    dissect_arguments(tvb, pinfo, tree, json_data, root_tok, event_name, TRUE, data);
+    dissect_arguments(tvb, pinfo, tree, json_data, root_tok, data->event_name, TRUE, data);
 
     // add signature metadata fields
     if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok, data)) != NULL)
         col_prepend_fstr(pinfo->cinfo, COL_INFO, "%s. ", signature_name);
-    
-    return event_name;
 }
 
 static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
@@ -2147,7 +2170,6 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     proto_tree *tracee_json_tree;
     guint len;
     gchar *json_data;
-    const gchar *event_name;
     struct tracee_dissector_data *dissector_data;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
@@ -2166,9 +2188,13 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
 
     // dissect event fields
     dissector_data = wmem_new0(pinfo->pool, struct tracee_dissector_data);
-    event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
+    dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
 
-    dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree, dissector_data);
+    // this event contains a packet, dissect it
+    if (dissector_data->packet_tvb != NULL)
+        return call_dissector(ip_dissector, dissector_data->packet_tvb, pinfo, tree);
+
+    dissector_try_string(event_name_dissector_table, dissector_data->event_name, tvb, pinfo, tree, dissector_data);
 
     tap_queue_packet(tracee_tap, pinfo, dissector_data);
 
@@ -3143,6 +3169,9 @@ void proto_register_tracee(void)
     
     // initialize event enrichment
     register_tracee_enrichments(proto_tracee);
+
+    // find IP dissector for packet dissection
+    DISSECTOR_ASSERT((ip_dissector = find_dissector("ip")) != NULL);
 }
 
 void proto_reg_handoff_tracee(void)

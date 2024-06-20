@@ -9,6 +9,7 @@ struct tracee_dissector_data {
     const gchar *event_name;
     gboolean is_signature;
     gint32 signature_severity;
+    tvbuff_t *packet_tvb;
 };
 
 enum field_type {
