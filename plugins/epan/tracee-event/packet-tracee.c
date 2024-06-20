@@ -48,7 +48,6 @@ static int hf_thread_id = -1;
 static int hf_parent_process_id = -1;
 static int hf_host_process_id = -1;
 static int hf_pid_col = -1;
-static int hf_tid_col = -1;
 static int hf_ppid_col = -1;
 static int hf_host_thread_id = -1;
 static int hf_host_parent_process_id = -1;
@@ -235,6 +234,20 @@ static gint ett_http_headers = -1;
 static gint ett_hooked_symbols_map = -1;
 static gint ett_dns_query_data = -1;
 
+// preferences
+enum pid_format {
+    PID_FORMAT_CONTAINER_ONLY = 0,
+    PID_FORMAT_HOST_ONLY,
+    PID_FORMAT_BOTH,
+};
+static gint pid_format = PID_FORMAT_CONTAINER_ONLY;
+enum container_identifier {
+    CONTAINER_IDENTIFIER_ID = 0,
+    CONTAINER_IDENTIFIER_NAME,
+};
+static gint container_identifier = CONTAINER_IDENTIFIER_ID;
+static gboolean show_container_image = FALSE;
+
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
     wmem_map_t *arg_idx_map;    // mapping between argument name to its index in the hf array
@@ -325,9 +338,12 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
 
     // add container column
     if (id != NULL) {
-        container_col_str = wmem_strndup(pinfo->pool, id, 12);
+        if (container_identifier == CONTAINER_IDENTIFIER_ID)
+            container_col_str = wmem_strndup(pinfo->pool, id, 12);
+        else
+            container_col_str = wmem_strdup(pinfo->pool, name);
 
-        if (image != NULL)
+        if (image != NULL && show_container_image)
             container_col_str = wmem_strdup_printf(pinfo->pool, "%s (%s)", container_col_str, image);
         
         tmp_item = proto_tree_add_string(tree, hf_container_col, tvb, 0, 0, container_col_str);
@@ -1914,7 +1930,7 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     nstime_t timestamp;
     gint32 pid, host_pid, tid, host_tid, ppid, host_ppid;
     gchar *event_name, *process_name, *syscall, *signature_name, *tmp_str,
-        *pid_col_str = NULL, *tid_col_str = NULL, *ppid_col_str = NULL;
+        *pid_col_str = NULL, *ppid_col_str = NULL;
     proto_item *tmp_item;
     gboolean is_signature;
 
@@ -1967,9 +1983,19 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // add PID column
     if (pid != 0) {
-        pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
-        if (pid != host_pid)
-            pid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", pid_col_str, host_pid);
+        switch (pid_format) {
+            case PID_FORMAT_CONTAINER_ONLY:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
+                break;
+            case PID_FORMAT_HOST_ONLY:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_pid);
+                break;
+            default:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
+                if (pid != host_pid)
+                    pid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", pid_col_str, host_pid);
+                break;
+        }
         tmp_item = proto_tree_add_string(tree, hf_pid_col, tvb, 0, 0, pid_col_str);
         proto_item_set_hidden(tmp_item);
     }
@@ -1979,15 +2005,6 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     host_tid = (gint32)tmp_int;
     proto_tree_add_int(tree, hf_host_thread_id, tvb, 0, 0, host_tid);
 
-    // add TID column
-    if (tid != 0) {
-        tid_col_str = wmem_strdup_printf(pinfo->pool, "%d", tid);
-        if (tid != host_tid)
-            tid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", tid_col_str, host_tid);
-        tmp_item = proto_tree_add_string(tree, hf_tid_col, tvb, 0, 0, tid_col_str);
-        proto_item_set_hidden(tmp_item);
-    }
-
     // add host parent process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostParentProcessId", &tmp_int));
     host_ppid = (gint32)tmp_int;
@@ -1995,9 +2012,19 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // add PPID column
     if (ppid != 0) {
-        ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
-        if (ppid != host_ppid)
-            ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, host_ppid);
+        switch (pid_format) {
+            case PID_FORMAT_CONTAINER_ONLY:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
+                break;
+            case PID_FORMAT_HOST_ONLY:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_ppid);
+                break;
+            default:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
+                if (ppid != host_ppid)
+                    ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, host_ppid);
+                break;
+        }
         tmp_item = proto_tree_add_string(tree, hf_ppid_col, tvb, 0, 0, ppid_col_str);
         proto_item_set_hidden(tmp_item);
     }
@@ -2267,11 +2294,6 @@ void proto_register_tracee(void)
         },
         { &hf_pid_col,
           { "PID Column", "tracee.pid_col",
-            FT_STRINGZ, BASE_NONE, NULL, 0,
-            NULL, HFILL }
-        },
-        { &hf_tid_col,
-          { "TID Column", "tracee.tid_col",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
@@ -3024,6 +3046,21 @@ void proto_register_tracee(void)
         }
     };
 
+    module_t *tracee_module;
+
+    static const enum_val_t pid_format_vals[] = {
+        {"container", "Show PID in container", PID_FORMAT_CONTAINER_ONLY},
+        {"host", "Show PID on host", PID_FORMAT_HOST_ONLY},
+        {"both", "Show both PID in container and on host", PID_FORMAT_BOTH},
+        {NULL, NULL, -1}
+    };
+
+    static const enum_val_t container_identifier_vals[] = {
+        {"id", "Container ID", CONTAINER_IDENTIFIER_ID},
+        {"name", "Container name", CONTAINER_IDENTIFIER_NAME},
+        {NULL, NULL, -1}
+    };
+
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
     proto_register_field_array(proto_tracee, network_hf, array_length(network_hf));
@@ -3036,6 +3073,19 @@ void proto_register_tracee(void)
     proto_register_field_array(proto_tracee, proto_http_hf, array_length(proto_http_hf));
     proto_register_field_array(proto_tracee, hooked_symbols_hf, array_length(hooked_symbols_hf));
     proto_register_subtree_array(ett, array_length(ett));
+
+    tracee_module = prefs_register_protocol(proto_tracee, NULL);
+
+    prefs_register_enum_preference(tracee_module, "pid_format", "PID column format",
+        "Whether to show only PID in container, only PID on host, or both",
+        &pid_format, pid_format_vals, FALSE);
+
+    prefs_register_enum_preference(tracee_module, "container_identifier", "Container identifier in column",
+        "Whether to show container ID or name in the container column",
+        &container_identifier, container_identifier_vals, FALSE);
+    
+    prefs_register_bool_preference(tracee_module, "container_image", "Show container image",
+        "Whether to show the container image in the container column", &show_container_image);
 
     // initialize mapping of supported complex types and their dissection functions
     init_complex_types();
