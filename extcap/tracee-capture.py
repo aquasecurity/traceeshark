@@ -27,10 +27,9 @@ MAC = sys.platform == 'darwin'
 
 if WINDOWS:
     TMP_DIR = os.path.join(os.getenv('APPDATA'), 'Traceeshark')
-
 else:
     TMP_DIR = '/tmp/traceeshark'
-    os.makedirs(TMP_DIR, exist_ok=True)
+os.makedirs(TMP_DIR, exist_ok=True)
 
 EXTCAP_VERSION = 'VERSION_PLACEHOLDER'
 DLT_NULL = 0
