@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.3
+
+Added:
+
+- Autoinstall script
+
+- Release for Wireshark version 4.2.2 on Linux (Ubuntu 24.04 Wireshark package version)
+
+Fixed:
+
+- Macos build and installation fixes
+
+- Windows build fixes
+
+- Live capture bugfixes
+
 ## v0.2.2
 
 Added:
