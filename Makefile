@@ -48,7 +48,7 @@ install:
 	@mkdir -p ~/.local/lib/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py
-	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+	@if [ "$(OS_NAME)" = "Darwin" ]; then \
 		cp extcap/tracee-capture.sh ~/.local/lib/wireshark/extcap; \
 		chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.sh; \
 	else \
@@ -60,7 +60,7 @@ install:
 	@mkdir -p ~/.config/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
 	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py
-	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+	@if [ "$(OS_NAME)" = "Darwin" ]; then \
 		cp extcap/tracee-capture.sh ~/.config/wireshark/extcap; \
 		chmod +x ~/.config/wireshark/extcap/tracee-capture.sh; \
 	else \
@@ -139,7 +139,7 @@ dist: all
 		cp wireshark/build/run/tracee-json.so* dist/workdir; \
 	fi
 
-	@if [ "$(OS_NAME)" == "Darwin" ]; then \
+	@if [ "$(OS_NAME)" = "Darwin" ]; then \
 		scripts/macos_rpathify.sh dist/workdir/tracee-json.so; \
 		scripts/macos_rpathify.sh dist/workdir/tracee-event.so; \
 		scripts/macos_rpathify.sh dist/workdir/tracee-network-capture.so; \
@@ -149,11 +149,15 @@ dist: all
 	@cp -r extcap dist/workdir
 
 	@rm dist/workdir/extcap/tracee-capture.bat
-	@if [ "$(OS_NAME)" == "Linux" ]; then \
+	@if [ "$(OS_NAME)" = "Linux" ]; then \
 		rm dist/workdir/extcap/tracee-capture.sh; \
 	fi
 
-	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' dist/workdir/extcap/tracee-capture.py
+	@if [ "$(OS_NAME)" = "Linux" ]; then \
+		sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' dist/workdir/extcap/tracee-capture.py; \
+	else \
+		sed -i '' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' dist/workdir/extcap/tracee-capture.py; \
+	fi
 
 	$(eval WS_VERSION := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+\.[0-9]+"))
 	@echo $(WS_VERSION) > dist/workdir/ws_version.txt
