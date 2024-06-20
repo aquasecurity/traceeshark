@@ -11,6 +11,7 @@ copy /Y build\run\RelWithDebInfo\tracee-network-capture dist\workdir\tracee-netw
 copy /Y build\run\RelWithDebInfo\tracee-json dist\workdir\tracee-json.dll
 xcopy /Y /E /I profiles dist\workdir\profiles
 xcopy /Y /E /I extcap dist\workdir\extcap
+del /Q dist\workdir\extcap\tracee-capture.sh
 powershell -Command "(gc dist\workdir\extcap\tracee-capture.py) -replace 'VERSION_PLACEHOLDER', '%TRACEESHARK_VERSION%' | Out-File -encoding ASCII dist\workdir\extcap\tracee-capture.py"
 
 for /f "tokens=2" %%a in ('build\run\RelWithDebInfo\wireshark.exe --version ^| find "Wireshark "') do (
