@@ -13,4 +13,6 @@ gui.column.format:
 	"Rval", "%Cus:tracee.returnValue:0:R",
 	"Event", "%Cus:tracee.eventName:0:R",
 	"Syscall", "%Cus:tracee.syscall:0:R",
+    "Source IP", "%s",
+	"Destination IP", "%d",
 	"Info", "%i"
