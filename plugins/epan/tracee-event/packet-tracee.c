@@ -1826,14 +1826,10 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
                 
                 // unsupported or unknown types
                 case FT_NONE:
-                    if ((dissector = wmem_map_lookup(complex_type_dissectors, arg_type)) != NULL)
-                        arg_str = dissector(tvb, args_tree, hf, json_data, curr_arg);
-                    else {
-                        ws_info("cannot dissect arg \"%s\" of unsupported type \"%s\"",
-                            hf->hfinfo.name, arg_type);
-                        tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
-                        proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
-                    }
+                    ws_info("cannot dissect arg \"%s\" of unsupported type \"%s\"",
+                        hf->hfinfo.name, arg_type);
+                    tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
+                    proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
                     break;
                 
                 default:
