@@ -414,9 +414,9 @@ def show_config(reload_option: Optional[str]):
     ]
 
     if reload_option is None or reload_option == 'preset':
-        values.append(ConfigVal(arg=id_preset, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='true'))
+        values.append(ConfigVal(arg=id_preset, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='false'))
         for preset in presets:
-            values.append(ConfigVal(arg=id_preset, value=preset, display=preset, default='false'))
+            values.append(ConfigVal(arg=id_preset, value=preset, display=preset, default='true' if preset == 'Default' else 'false'))
     
     if reload_option is None or reload_option == 'preset-from-file':
         values.append(ConfigVal(arg=id_preset_from_file, value='new', display='New preset (uses file name)', default='true'))
