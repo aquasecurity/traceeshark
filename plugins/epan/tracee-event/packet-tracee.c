@@ -103,6 +103,9 @@ static int hf_metadata_properties_release = -1;
 static int hf_metadata_properties_signature_id = -1;
 static int hf_metadata_properties_signature_name = -1;
 
+// dynamic fields needed by builtin filters
+static int hf_ptrace_request = -1;
+
 // network fields
 static int hf_ip_addr = -1;
 static int hf_ip_src = -1;
@@ -2566,6 +2569,15 @@ void proto_register_tracee(void)
         }
     };
 
+    // dynamic fields needed by builtin filters
+    static hf_register_info filter_hf[] = {
+        { &hf_ptrace_request,
+          { "request", "tracee.args.request",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+    };
+
     static hf_register_info network_hf[] = {
         { &hf_ip_addr,
           { "ip.addr", "ip.addr",
@@ -3075,6 +3087,7 @@ void proto_register_tracee(void)
 
     proto_tracee = proto_register_protocol("Tracee", "TRACEE", "tracee");
     proto_register_field_array(proto_tracee, hf, array_length(hf));
+    proto_register_field_array(proto_tracee, filter_hf, array_length(filter_hf));
     proto_register_field_array(proto_tracee, network_hf, array_length(network_hf));
     proto_register_field_array(proto_tracee, sockaddr_hf, array_length(sockaddr_hf));
     proto_register_field_array(proto_tracee, slim_cred_t_hf, array_length(slim_cred_t_hf));
