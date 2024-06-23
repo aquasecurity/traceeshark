@@ -27,7 +27,7 @@ static void plugin_register(void)
     tracee_event_plugin.register_handoff = proto_reg_handoff_tracee;
     proto_register_plugin(&tracee_event_plugin);
 
-    tracee_event_enrich_plugin.register_protoinfo = proto_register_tracee_enrichments;
+    tracee_event_enrich_plugin.register_protoinfo = NULL;
     tracee_event_enrich_plugin.register_handoff = proto_reg_handoff_tracee_enrichments;
     proto_register_plugin(&tracee_event_enrich_plugin);
 }

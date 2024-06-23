@@ -4,6 +4,10 @@ extern const value_string ipproto_val[];
 extern value_string_ext dns_types_vals_ext;
 extern const value_string dns_classes[];
 
+struct tracee_dissector_data {
+    proto_tree *args_tree;
+};
+
 enum field_type {
     FIELD_TYPE_INT,
     FIELD_TYPE_UINT,
@@ -38,5 +42,4 @@ proto_item *proto_tree_add_uint64_wanted(proto_tree *tree, int hfindex, tvbuff_t
 proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, const char* value);
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
 
-void register_tracee_postdissectors(int proto);
-void register_tracee_postdissectors_wanted_fields(void);
+void register_tracee_enrichments(int proto);

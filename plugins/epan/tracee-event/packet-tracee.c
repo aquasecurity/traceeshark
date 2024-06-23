@@ -20,7 +20,7 @@ const value_string packet_metadata_directions[] = {
     { 0, NULL      }
 };
 
-int proto_tracee = -1;
+static int proto_tracee = -1;
 
 static dissector_table_t event_name_dissector_table;
 
@@ -255,8 +255,8 @@ static wmem_map_t *event_dynamic_hf_map;
  */
 static wmem_map_t *complex_type_dissectors;
 
-static void dissect_arguments(tvbuff_t *, packet_info *,
-    proto_tree *, gchar *, jsmntok_t *, const gchar *, gboolean);
+static void dissect_arguments(tvbuff_t *, packet_info *, proto_tree *, gchar *,
+    jsmntok_t *, const gchar *, gboolean, struct tracee_dissector_data *);
 
 static void free_dynamic_hf(gpointer key _U_, gpointer value, gpointer user_data _U_)
 {
@@ -1804,7 +1804,7 @@ static gchar *dissect_hooked_symbol_data_arr(tvbuff_t *tvb, proto_tree *tree,
 }
 
 static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo,
-    gchar *json_data, jsmntok_t *arg_tok, const gchar *event_name)
+    gchar *json_data, jsmntok_t *arg_tok, const gchar *event_name, struct tracee_dissector_data *data)
 {
     proto_item *triggered_by_item;
     proto_tree *triggered_by_tree;
@@ -1841,11 +1841,11 @@ static void dissect_triggered_by(tvbuff_t *tvb, proto_tree *tree, packet_info *p
 
     // add args
     dissect_arguments(tvb, pinfo, triggered_by_tree, json_data, triggered_by_tok,
-        wmem_strdup_printf(wmem_packet_scope(), "%s.triggered_by", event_name), FALSE);
+        wmem_strdup_printf(wmem_packet_scope(), "%s.triggered_by", event_name), FALSE, data);
 }
 
-static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
-    gchar *json_data, jsmntok_t *root_tok, const gchar *event_name, gboolean set_info)
+static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data,
+    jsmntok_t *root_tok, const gchar *event_name, gboolean set_info, struct tracee_dissector_data *data)
 {
     jsmntok_t *args_tok, *curr_arg;
     int nargs, i;
@@ -1864,6 +1864,7 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     args_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
     proto_item_set_text(args_item, "Args");
     args_tree = proto_item_add_subtree(args_item, ett_args);
+    data->args_tree = args_tree;
 
     if ((nargs = json_get_array_len(args_tok)) == 0)
         proto_item_append_text(args_item, " (none)");
@@ -1880,7 +1881,7 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
         // special case of trggieredBy argument which will recursively
         // call back into dissect_arguments (needs extra parameters)
         if (strcmp(arg_type, "unknown") == 0 && strcmp(hf->hfinfo.name, "triggeredBy") == 0)
-            dissect_triggered_by(tvb, tree, pinfo, json_data, curr_arg, event_name);
+            dissect_triggered_by(tvb, tree, pinfo, json_data, curr_arg, event_name, data);
 
         // try dissecting this as a complex arg
         else if ((dissector = wmem_map_lookup(complex_type_dissectors, arg_type)) != NULL)
@@ -2045,7 +2046,8 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
     return signature_name;
 }
 
-static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
+static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    proto_item *item, gchar *json_data, struct tracee_dissector_data *data)
 {
     int num_toks;
     jsmntok_t *root_tok;
@@ -2112,7 +2114,7 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     proto_tree_add_string(tree, hf_syscall, tvb, 0, 0, syscall);
     
     // add arguments
-    dissect_arguments(tvb, pinfo, tree, json_data, root_tok, event_name, TRUE);
+    dissect_arguments(tvb, pinfo, tree, json_data, root_tok, event_name, TRUE, data);
 
     // add signature metadata fields
     if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok)) != NULL)
@@ -2121,13 +2123,14 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     return event_name;
 }
 
-static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
+static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
 {
     proto_item *tracee_json_item;
     proto_tree *tracee_json_tree;
     guint len;
     gchar *json_data;
     const gchar *event_name;
+    struct tracee_dissector_data *dissector_data;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
 
@@ -2144,9 +2147,10 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     json_data[len] = '\0';
 
     // dissect event fields
-    event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
+    dissector_data = wmem_new0(pinfo->pool, struct tracee_dissector_data);
+    event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
 
-    dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree, data);
+    dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree, dissector_data);
 
     return tvb_captured_length(tvb);
 }
@@ -3113,6 +3117,9 @@ void proto_register_tracee(void)
     // register event name dissector table
     event_name_dissector_table = register_dissector_table("tracee.eventName",
         "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);
+    
+    // initialize event enrichment
+    register_tracee_enrichments(proto_tracee);
 }
 
 void proto_reg_handoff_tracee(void)
