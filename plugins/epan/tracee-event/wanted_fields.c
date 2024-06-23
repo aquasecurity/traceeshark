@@ -52,6 +52,17 @@ const gchar *wanted_field_get_str(const gchar *filter_name)
     return fv->val.val_string;
 }
 
+gint *wanted_field_get_int(const gchar *filter_name)
+{
+    struct field_value *fv;
+
+    if ((fv = wanted_field_get_one(filter_name)) == NULL)
+        return NULL;
+    
+    DISSECTOR_ASSERT(fv->type == FIELD_TYPE_INT);
+    return &fv->val.val_int;
+}
+
 static gboolean field_is_wanted(header_field_info *hf)
 {
     // make sure wanted fields map exists

@@ -96,7 +96,7 @@ static int dissect_net_packet_http(tvbuff_t *tvb _U_, packet_info *pinfo, proto_
     return 0;
 }
 
-static int dissect_security_socket_bind_connect(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+static int dissect_security_socket_bind_connect(packet_info *pinfo, const gchar *verb)
 {
     const gchar *family, *addr, *port;
 
@@ -117,10 +117,20 @@ static int dissect_security_socket_bind_connect(tvbuff_t *tvb _U_, packet_info *
         return 0;
     
     if (addr && port) {
-        col_add_fstr(pinfo->cinfo, COL_INFO, "Address: %s, Port: %s", addr, port);
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s port %s", verb, addr, port);
     }
 
     return 0;
+}
+
+static int dissect_security_socket_bind(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    return dissect_security_socket_bind_connect(pinfo, "Bind");
+}
+
+static int dissect_security_socket_connect(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    return dissect_security_socket_bind_connect(pinfo, "Connect");
 }
 
 static int dissect_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
@@ -140,6 +150,36 @@ static int dissect_fileless_execution(tvbuff_t *tvb _U_, packet_info *pinfo, pro
     if (pathname)
         col_append_fstr(pinfo->cinfo, COL_INFO, "Running from %s", pathname);
     
+    return 0;
+}
+
+static int dissect_stdio_over_socket(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    gint *fd;
+    const gchar *addr, *port, *stream;
+
+    fd = wanted_field_get_int("tracee.args.File_descriptor");
+    addr = wanted_field_get_str("tracee.args.IP_address");
+    port = wanted_field_get_str("tracee.args.Port");
+
+    if (fd && addr && port) {
+        switch (*fd) {
+            case 0:
+                stream = "STDIN";
+                break;
+            case 1:
+                stream = "STDOUT";
+                break;
+            case 2:
+                stream = "STDERR";
+                break;
+            default:
+                return 0;
+        }
+
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s forwarded to %s port %s", stream, addr, port);
+    }
+
     return 0;
 }
 
@@ -194,6 +234,11 @@ static void register_wanted_fields(void)
 
     // needed for dissect_dynamic_code_loading
     register_wanted_field("tracee.args.alert");
+
+    // needed for dissect_stdio_over_socket
+    register_wanted_field("tracee.args.File_descriptor");
+    register_wanted_field("tracee.args.IP_address");
+    register_wanted_field("tracee.args.Port");
 }
 
 void register_tracee_postdissectors(int proto)
@@ -206,10 +251,11 @@ void register_tracee_postdissectors(int proto)
     register_tracee_event_postdissector("sched_process_exec", dissect_sched_process_exec);
     register_tracee_event_postdissector("net_packet_http_request", dissect_net_packet_http_request);
     register_tracee_event_postdissector("net_packet_http", dissect_net_packet_http);
-    register_tracee_event_postdissector("security_socket_bind", dissect_security_socket_bind_connect);
-    register_tracee_event_postdissector("security_socket_connect", dissect_security_socket_bind_connect);
+    register_tracee_event_postdissector("security_socket_bind", dissect_security_socket_bind);
+    register_tracee_event_postdissector("security_socket_connect", dissect_security_socket_connect);
     register_tracee_event_postdissector("dynamic_code_loading", dissect_dynamic_code_loading);
     register_tracee_event_postdissector("fileless_execution", dissect_fileless_execution);
+    register_tracee_event_postdissector("stdio_over_socket", dissect_stdio_over_socket);
 
     register_wanted_fields();
 }
