@@ -219,6 +219,7 @@ static int hf_hooked_symbol_module_owner = -1;
 static int hf_hooked_symbol_entry = -1;
 
 static gint ett_tracee = -1;
+static gint ett_context = -1;
 static gint ett_container = -1;
 static gint ett_k8s = -1;
 static gint ett_metadata = -1;
@@ -351,7 +352,7 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
     }
 }
 
-static void dissect_k8s_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data _U_, jsmntok_t *root_tok _U_)
+static void dissect_k8s_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
 {
     proto_item *k8s_item;
     proto_tree *k8s_tree;
@@ -385,6 +386,144 @@ static void dissect_k8s_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data
     // no kubernetes info
     if (!pod_name && !pod_namespace && !pod_uid)
         proto_item_append_text(k8s_item, ": none");
+}
+
+static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+{
+    proto_item *context_item, *tmp_item;
+    proto_tree *context_tree;
+    nstime_t timestamp;
+    gint64 tmp_int;
+    gint32 pid, host_pid, ppid, host_ppid;
+    gchar *pid_col_str = NULL, *ppid_col_str = NULL, *tmp_str;
+    jsmntok_t *tmp_tok;
+
+    context_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(context_item, "Context");
+    context_tree = proto_item_add_subtree(context_item, ett_context);
+
+    // add thread start time
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadStartTime", &tmp_int));
+    timestamp.secs = (guint64)tmp_int / 1000000000;
+    timestamp.nsecs = (guint64)tmp_int % 1000000000;
+    proto_tree_add_time(context_tree, hf_thread_start_time, tvb, 0, 0, &timestamp);
+
+    // add processor ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processorId", &tmp_int));
+    proto_tree_add_int64(context_tree, hf_processor_id, tvb, 0, 0, tmp_int);
+
+    // add cgroup ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "cgroupId", &tmp_int));
+    proto_tree_add_int64(context_tree, hf_cgroup_id, tvb, 0, 0, tmp_int);
+
+    // add process ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processId", &tmp_int));
+    pid = (gint32)tmp_int;
+    proto_tree_add_int(context_tree, hf_process_id, tvb, 0, 0, pid);
+
+    // add thread ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadId", &tmp_int));
+    proto_tree_add_int(context_tree, hf_thread_id, tvb, 0, 0, (gint32)tmp_int);        
+
+    // add parent process ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentProcessId", &tmp_int));
+    ppid = (gint32)tmp_int;
+    proto_tree_add_int(context_tree, hf_parent_process_id, tvb, 0, 0, ppid);
+
+    // add host process ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostProcessId", &tmp_int));
+    host_pid = (gint32)tmp_int;
+    proto_tree_add_int(context_tree, hf_host_process_id, tvb, 0, 0, host_pid);
+
+    // add PID column
+    if (pid != 0) {
+        switch (pid_format) {
+            case PID_FORMAT_CONTAINER_ONLY:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
+                break;
+            case PID_FORMAT_HOST_ONLY:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_pid);
+                break;
+            default:
+                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
+                if (pid != host_pid)
+                    pid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", pid_col_str, host_pid);
+                break;
+        }
+        tmp_item = proto_tree_add_string(context_tree, hf_pid_col, tvb, 0, 0, pid_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
+
+    // add host thread ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostThreadId", &tmp_int));
+    proto_tree_add_int(context_tree, hf_host_thread_id, tvb, 0, 0, (gint32)tmp_int);
+
+    // add host parent process ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostParentProcessId", &tmp_int));
+    host_ppid = (gint32)tmp_int;
+    proto_tree_add_int(context_tree, hf_host_parent_process_id, tvb, 0, 0, host_ppid);
+
+    // add PPID column
+    if (ppid != 0) {
+        switch (pid_format) {
+            case PID_FORMAT_CONTAINER_ONLY:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
+                break;
+            case PID_FORMAT_HOST_ONLY:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_ppid);
+                break;
+            default:
+                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
+                if (ppid != host_ppid)
+                    ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, host_ppid);
+                break;
+        }
+        tmp_item = proto_tree_add_string(context_tree, hf_ppid_col, tvb, 0, 0, ppid_col_str);
+        proto_item_set_hidden(tmp_item);
+    }
+
+    // add user ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "userId", &tmp_int));
+    proto_tree_add_uint(context_tree, hf_user_id, tvb, 0, 0, (guint32)tmp_int);
+
+    // add mount namespace
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "mountNamespace", &tmp_int));
+    proto_tree_add_uint(context_tree, hf_mount_namespace, tvb, 0, 0, (guint32)tmp_int);
+
+    // add PID namespace
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "pidNamespace", &tmp_int));
+    proto_tree_add_uint(context_tree, hf_pid_namespace, tvb, 0, 0, (guint32)tmp_int);
+
+    // add process name
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "processName")) != NULL);
+    proto_tree_add_string(context_tree, hf_process_name, tvb, 0, 0, tmp_str);
+
+    // add executable path
+    DISSECTOR_ASSERT((tmp_tok = json_get_object(json_data, root_tok, "executable")) != NULL);
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, tmp_tok, "path")) != NULL);
+    proto_tree_add_string(context_tree, hf_executable_path, tvb, 0, 0, tmp_str);
+
+    // add hostname
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "hostName")) != NULL);
+    proto_tree_add_string(context_tree, hf_hostname, tvb, 0, 0, tmp_str);
+
+    // add container fields
+    dissect_container_fields(tvb, pinfo, context_tree, json_data, root_tok);
+
+    // add k8s fields
+    dissect_k8s_fields(tvb, context_tree, json_data, root_tok);
+
+    // add thread entity ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadEntityId", &tmp_int));
+    proto_tree_add_int64(context_tree, hf_thread_entity_id, tvb, 0, 0, tmp_int);
+
+    // add process entity ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processEntityId", &tmp_int));
+    proto_tree_add_int64(context_tree, hf_process_entity_id, tvb, 0, 0, tmp_int);
+
+    // add parent entity ID
+    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentEntityId", &tmp_int));
+    proto_tree_add_int64(context_tree, hf_parent_entity_id, tvb, 0, 0, tmp_int);
 }
 
 struct type_display {
@@ -1921,12 +2060,10 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
 static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
 {
     int num_toks;
-    jsmntok_t *root_tok, *tmp_tok;
+    jsmntok_t *root_tok;
     gint64 event_id, tmp_int;
     nstime_t timestamp;
-    gint32 pid, host_pid, tid, host_tid, ppid, host_ppid;
-    gchar *event_name, *process_name, *syscall, *signature_name, *tmp_str,
-        *pid_col_str = NULL, *ppid_col_str = NULL;
+    gchar *event_name, *syscall, *signature_name, *tmp_str;
     proto_item *tmp_item;
     gboolean is_signature;
 
@@ -1943,118 +2080,8 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     timestamp.nsecs = (guint64)tmp_int % 1000000000;
     proto_tree_add_time(tree, hf_timestamp, tvb, 0, 0, &timestamp);
 
-    // add thread start time
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadStartTime", &tmp_int));
-    timestamp.secs = (guint64)tmp_int / 1000000000;
-    timestamp.nsecs = (guint64)tmp_int % 1000000000;
-    proto_tree_add_time(tree, hf_thread_start_time, tvb, 0, 0, &timestamp);
-
-    // add processor ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processorId", &tmp_int));
-    proto_tree_add_int64(tree, hf_processor_id, tvb, 0, 0, tmp_int);
-
-    // add cgroup ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "cgroupId", &tmp_int));
-    proto_tree_add_int64(tree, hf_cgroup_id, tvb, 0, 0, tmp_int);
-
-    // add process ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processId", &tmp_int));
-    pid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_process_id, tvb, 0, 0, pid);
-
-    // add thread ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadId", &tmp_int));
-    tid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_thread_id, tvb, 0, 0, tid);        
-
-    // add parent process ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentProcessId", &tmp_int));
-    ppid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_parent_process_id, tvb, 0, 0, ppid);
-
-    // add host process ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostProcessId", &tmp_int));
-    host_pid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_host_process_id, tvb, 0, 0, host_pid);
-
-    // add PID column
-    if (pid != 0) {
-        switch (pid_format) {
-            case PID_FORMAT_CONTAINER_ONLY:
-                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
-                break;
-            case PID_FORMAT_HOST_ONLY:
-                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_pid);
-                break;
-            default:
-                pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
-                if (pid != host_pid)
-                    pid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", pid_col_str, host_pid);
-                break;
-        }
-        tmp_item = proto_tree_add_string(tree, hf_pid_col, tvb, 0, 0, pid_col_str);
-        proto_item_set_hidden(tmp_item);
-    }
-
-    // add host thread ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostThreadId", &tmp_int));
-    host_tid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_host_thread_id, tvb, 0, 0, host_tid);
-
-    // add host parent process ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostParentProcessId", &tmp_int));
-    host_ppid = (gint32)tmp_int;
-    proto_tree_add_int(tree, hf_host_parent_process_id, tvb, 0, 0, host_ppid);
-
-    // add PPID column
-    if (ppid != 0) {
-        switch (pid_format) {
-            case PID_FORMAT_CONTAINER_ONLY:
-                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
-                break;
-            case PID_FORMAT_HOST_ONLY:
-                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", host_ppid);
-                break;
-            default:
-                ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
-                if (ppid != host_ppid)
-                    ppid_col_str = wmem_strdup_printf(pinfo->pool, "%s (%d)", ppid_col_str, host_ppid);
-                break;
-        }
-        tmp_item = proto_tree_add_string(tree, hf_ppid_col, tvb, 0, 0, ppid_col_str);
-        proto_item_set_hidden(tmp_item);
-    }
-
-    // add user ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "userId", &tmp_int));
-    proto_tree_add_uint(tree, hf_user_id, tvb, 0, 0, (guint32)tmp_int);
-
-    // add mount namespace
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "mountNamespace", &tmp_int));
-    proto_tree_add_uint(tree, hf_mount_namespace, tvb, 0, 0, (guint32)tmp_int);
-
-    // add PID namespace
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "pidNamespace", &tmp_int));
-    proto_tree_add_uint(tree, hf_pid_namespace, tvb, 0, 0, (guint32)tmp_int);
-
-    // add process name
-    DISSECTOR_ASSERT((process_name = json_get_string(json_data, root_tok, "processName")) != NULL);
-    proto_tree_add_string(tree, hf_process_name, tvb, 0, 0, process_name);
-
-    // add executable path
-    DISSECTOR_ASSERT((tmp_tok = json_get_object(json_data, root_tok, "executable")) != NULL);
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, tmp_tok, "path")) != NULL);
-    proto_tree_add_string(tree, hf_executable_path, tvb, 0, 0, tmp_str);
-
-    // add hostname
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, root_tok, "hostName")) != NULL);
-    proto_tree_add_string(tree, hf_hostname, tvb, 0, 0, tmp_str);
-
-    // add container fields
-    dissect_container_fields(tvb, pinfo, tree, json_data, root_tok);
-
-    // add k8s fields
-    dissect_k8s_fields(tvb, tree, json_data, root_tok);
+    // add event context
+    dissect_event_context(tvb, pinfo, tree, json_data, root_tok);
 
     // add event ID
     if (!json_get_int(json_data, root_tok, "eventId", &event_id)) {
@@ -2095,18 +2122,6 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add syscall
     DISSECTOR_ASSERT((syscall = json_get_string(json_data, root_tok, "syscall")) != NULL);
     proto_tree_add_string(tree, hf_syscall, tvb, 0, 0, syscall);
-
-    // add thread entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadEntityId", &tmp_int));
-    proto_tree_add_int64(tree, hf_thread_entity_id, tvb, 0, 0, tmp_int);
-
-    // add process entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processEntityId", &tmp_int));
-    proto_tree_add_int64(tree, hf_process_entity_id, tvb, 0, 0, tmp_int);
-
-    // add parent entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentEntityId", &tmp_int));
-    proto_tree_add_int64(tree, hf_parent_entity_id, tvb, 0, 0, tmp_int);
     
     // add arguments
     dissect_arguments(tvb, pinfo, tree, json_data, root_tok, event_name, TRUE);
@@ -2231,6 +2246,7 @@ void proto_register_tracee(void)
 {
     static gint *ett[] = {
         &ett_tracee,
+        &ett_context,
         &ett_container,
         &ett_k8s,
         &ett_metadata,
