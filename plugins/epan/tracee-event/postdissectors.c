@@ -98,7 +98,7 @@ static int dissect_net_packet_http(tvbuff_t *tvb _U_, packet_info *pinfo, proto_
 
 static int dissect_security_socket_bind_connect(packet_info *pinfo, const gchar *verb)
 {
-    const gchar *family, *addr, *port;
+    const gchar *family, *addr, *port = NULL;
 
     family = wanted_field_get_str("tracee.sockaddr.sa_family");
 
@@ -113,11 +113,17 @@ static int dissect_security_socket_bind_connect(packet_info *pinfo, const gchar 
         addr = wanted_field_get_str("tracee.sockaddr.sin6_addr");
         port = wanted_field_get_str("tracee.sockaddr.sin6_port");
     }
+    else if (strcmp(family, "AF_UNIX") == 0) {
+        addr = wanted_field_get_str("tracee.sockaddr.sun_path");
+    }
     else
         return 0;
     
-    if (addr && port) {
-        col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s port %s", verb, addr, port);
+    if (addr) {
+        if (port)
+            col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s port %s", verb, addr, port);
+        else
+            col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s", verb, addr);
     }
 
     return 0;
@@ -231,6 +237,7 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.sockaddr.sin_port");
     register_wanted_field("tracee.sockaddr.sin6_addr");
     register_wanted_field("tracee.sockaddr.sin6_port");
+    register_wanted_field("tracee.sockaddr.sun_path");
 
     // needed for dissect_dynamic_code_loading
     register_wanted_field("tracee.args.alert");
