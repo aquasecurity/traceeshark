@@ -1178,7 +1178,7 @@ def tracee_capture(args: argparse.Namespace):
     if not args.container_image or not args.docker_options:
         error('no image or docker options provided')
     
-    if not args.remote_host:
+    if not local and not args.remote_host:
         error('no remote host specified')
     
     # catch termination signals from Wireshark (currently on Windows it is not possible to be notified of
