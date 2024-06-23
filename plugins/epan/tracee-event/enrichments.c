@@ -1,9 +1,7 @@
 #include <epan/packet.h>
 #include "tracee.h"
 
-static dissector_handle_t event_postdissector;
-
-wmem_map_t *event_postdissectors;
+extern int proto_tracee;
 
 static int dissect_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
@@ -189,31 +187,8 @@ static int dissect_stdio_over_socket(tvbuff_t *tvb _U_, packet_info *pinfo, prot
     return 0;
 }
 
-static int postdissect_event(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
-{
-    const char *event_name;
-    dissector_t dissector;
-
-    event_name = wanted_field_get_str("tracee.eventName");
-    if (event_name == NULL)
-        return 0;
-    
-    if ((dissector = wmem_map_lookup(event_postdissectors, event_name)) == NULL)
-        return 0;
-    
-    return dissector(tvb, pinfo, tree, data);
-}
-
-static void register_tracee_event_postdissector(const gchar *event_name, dissector_t dissector_func)
-{
-    wmem_map_insert(event_postdissectors, event_name, dissector_func);
-}
-
 static void register_wanted_fields(void)
 {
-    // needed for general postdissector
-    register_wanted_field("tracee.eventName");
-
     // needed for dissect_sched_process_exec and dissect_fileless_execution
     register_wanted_field("tracee.args.pathname");
     register_wanted_field("tracee.args.command_line");
@@ -248,21 +223,25 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.args.Port");
 }
 
-void register_tracee_postdissectors(int proto)
+void proto_register_tracee_enrichments(void)
 {
-    event_postdissector = register_dissector("tracee-event-postdissector", postdissect_event, proto);
-    register_postdissector(event_postdissector);
-
-    event_postdissectors = wmem_map_new(wmem_epan_scope(), g_str_hash, g_str_equal);
-
-    register_tracee_event_postdissector("sched_process_exec", dissect_sched_process_exec);
-    register_tracee_event_postdissector("net_packet_http_request", dissect_net_packet_http_request);
-    register_tracee_event_postdissector("net_packet_http", dissect_net_packet_http);
-    register_tracee_event_postdissector("security_socket_bind", dissect_security_socket_bind);
-    register_tracee_event_postdissector("security_socket_connect", dissect_security_socket_connect);
-    register_tracee_event_postdissector("dynamic_code_loading", dissect_dynamic_code_loading);
-    register_tracee_event_postdissector("fileless_execution", dissect_fileless_execution);
-    register_tracee_event_postdissector("stdio_over_socket", dissect_stdio_over_socket);
-
     register_wanted_fields();
+}
+
+static void register_tracee_event_enrichment(const gchar *event_name, dissector_t dissector)
+{
+    dissector_handle_t dissector_handle = create_dissector_handle(dissector, proto_tracee);
+    dissector_add_string("tracee.eventName", event_name, dissector_handle);
+}
+
+void proto_reg_handoff_tracee_enrichments(void)
+{
+    register_tracee_event_enrichment("sched_process_exec", dissect_sched_process_exec);
+    register_tracee_event_enrichment("net_packet_http_request", dissect_net_packet_http_request);
+    register_tracee_event_enrichment("net_packet_http", dissect_net_packet_http);
+    register_tracee_event_enrichment("security_socket_bind", dissect_security_socket_bind);
+    register_tracee_event_enrichment("security_socket_connect", dissect_security_socket_connect);
+    register_tracee_event_enrichment("dynamic_code_loading", dissect_dynamic_code_loading);
+    register_tracee_event_enrichment("fileless_execution", dissect_fileless_execution);
+    register_tracee_event_enrichment("stdio_over_socket", dissect_stdio_over_socket);
 }

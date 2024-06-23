@@ -1,5 +1,3 @@
-#define WS_BUILD_DLL
-
 #include <errno.h>
 #include <inttypes.h>
 
@@ -10,20 +8,7 @@
 #include <epan/ipproto.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
-#include <wsutil/plugins.h>
 #include <wsutil/wslog.h>
-#include <ws_version.h>
-
-#ifndef WIRESHARK_PLUGIN_REGISTER // old plugin API
-WS_DLL_PUBLIC_DEF const char plugin_version[] = PLUGIN_VERSION;
-WS_DLL_PUBLIC_DEF const int plugin_want_major = WIRESHARK_VERSION_MAJOR;
-WS_DLL_PUBLIC_DEF const int plugin_want_minor = WIRESHARK_VERSION_MINOR;
-
-WS_DLL_PUBLIC void plugin_register(void);
-#ifdef WS_PLUGIN_DESC_DISSECTOR
-WS_DLL_PUBLIC uint32_t plugin_describe(void);
-#endif
-#endif
 
 #define START_SIGNATURE_ID 6000
 #define MAX_SIGNATURE_ID   6999
@@ -35,9 +20,9 @@ const value_string packet_metadata_directions[] = {
     { 0, NULL      }
 };
 
-static int proto_tracee = -1;
+int proto_tracee = -1;
 
-//static dissector_table_t event_name_dissector_table;
+static dissector_table_t event_name_dissector_table;
 
 static int hf_timestamp = -1;
 static int hf_thread_start_time = -1;
@@ -2060,7 +2045,7 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
     return signature_name;
 }
 
-static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
+static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, gchar *json_data)
 {
     int num_toks;
     jsmntok_t *root_tok;
@@ -2132,14 +2117,17 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add signature metadata fields
     if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok)) != NULL)
         col_prepend_fstr(pinfo->cinfo, COL_INFO, "%s. ", signature_name);
+    
+    return event_name;
 }
 
-static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
+static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
 {
     proto_item *tracee_json_item;
     proto_tree *tracee_json_tree;
     guint len;
     gchar *json_data;
+    const gchar *event_name;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "TRACEE");
 
@@ -2156,7 +2144,9 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     json_data[len] = '\0';
 
     // dissect event fields
-    dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
+    event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data);
+
+    dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree, data);
 
     return tvb_captured_length(tvb);
 }
@@ -3121,10 +3111,8 @@ void proto_register_tracee(void)
     wmem_register_callback(wmem_file_scope(), dynamic_hf_map_destroy_cb, NULL);
 
     // register event name dissector table
-    /*event_name_dissector_table = register_dissector_table("tracee.eventName",
-        "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);*/
-    
-    register_tracee_postdissectors(proto_tracee);
+    event_name_dissector_table = register_dissector_table("tracee.eventName",
+        "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);
 }
 
 void proto_reg_handoff_tracee(void)
@@ -3136,36 +3124,3 @@ void proto_reg_handoff_tracee(void)
     // register to encapsulation dissector table (we use a user-reserved encapsulation)
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);
 }
-
-#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
-static void plugin_register(void)
-#else
-void plugin_register(void)
-#endif
-{
-    static proto_plugin plugin;
-
-    plugin.register_protoinfo = proto_register_tracee;
-    plugin.register_handoff = proto_reg_handoff_tracee;
-    proto_register_plugin(&plugin);
-}
-
-#ifdef WIRESHARK_PLUGIN_REGISTER // new plugin API
-static struct ws_module module = {
-    .flags = WS_PLUGIN_DESC_DISSECTOR,
-    .version = PLUGIN_VERSION,
-    .spdx_id = "GPL-2.0-or-later",
-    .home_url = "",
-    .blurb = "Tracee event dissector",
-    .register_cb = &plugin_register,
-};
-
-WIRESHARK_PLUGIN_REGISTER_EPAN(&module, 0)
-#endif
-
-#ifdef WS_PLUGIN_DESC_DISSECTOR
-uint32_t plugin_describe(void)
-{
-    return WS_PLUGIN_DESC_DISSECTOR;
-}
-#endif
