@@ -123,6 +123,26 @@ static int dissect_security_socket_bind_connect(tvbuff_t *tvb _U_, packet_info *
     return 0;
 }
 
+static int dissect_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    const gchar *alert = wanted_field_get_str("tracee.args.alert");
+
+    if (alert)
+        col_append_str(pinfo->cinfo, COL_INFO, alert);
+    
+    return 0;
+}
+
+static int dissect_fileless_execution(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    const gchar *pathname = wanted_field_get_str("tracee.args.pathname");
+
+    if (pathname)
+        col_append_fstr(pinfo->cinfo, COL_INFO, "Running from %s", pathname);
+    
+    return 0;
+}
+
 static int postdissect_event(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
 {
     const char *event_name;
@@ -148,7 +168,7 @@ static void register_wanted_fields(void)
     // needed for general postdissector
     register_wanted_field("tracee.eventName");
 
-    // needed for dissect_sched_process_exec
+    // needed for dissect_sched_process_exec and dissect_fileless_execution
     register_wanted_field("tracee.args.pathname");
     register_wanted_field("tracee.args.command_line");
 
@@ -171,6 +191,9 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.sockaddr.sin_port");
     register_wanted_field("tracee.sockaddr.sin6_addr");
     register_wanted_field("tracee.sockaddr.sin6_port");
+
+    // needed for dissect_dynamic_code_loading
+    register_wanted_field("tracee.args.alert");
 }
 
 void register_tracee_postdissectors(int proto)
@@ -185,6 +208,8 @@ void register_tracee_postdissectors(int proto)
     register_tracee_event_postdissector("net_packet_http", dissect_net_packet_http);
     register_tracee_event_postdissector("security_socket_bind", dissect_security_socket_bind_connect);
     register_tracee_event_postdissector("security_socket_connect", dissect_security_socket_bind_connect);
+    register_tracee_event_postdissector("dynamic_code_loading", dissect_dynamic_code_loading);
+    register_tracee_event_postdissector("fileless_execution", dissect_fileless_execution);
 
     register_wanted_fields();
 }
