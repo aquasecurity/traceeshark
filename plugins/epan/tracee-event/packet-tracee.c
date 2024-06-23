@@ -2113,7 +2113,7 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // add signature metadata fields
     if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok)) != NULL)
-        col_set_str(pinfo->cinfo, COL_INFO, signature_name);
+        col_prepend_fstr(pinfo->cinfo, COL_INFO, "%s. ", signature_name);
 }
 
 static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
