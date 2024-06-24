@@ -3,8 +3,6 @@
 #include <epan/packet.h>
 #include "tracee.h"
 
-static int proto_tracee_enrichments;
-
 static int hf_decoded_data = -1;
 static int hf_file_type = -1;
 
@@ -333,7 +331,12 @@ void register_tracee_enrichments(int proto)
 
 static void register_tracee_event_enrichment(const gchar *event_name, dissector_t dissector)
 {
-    dissector_handle_t dissector_handle = create_dissector_handle(dissector, proto_tracee_enrichments);
+    int proto_tracee;
+    dissector_handle_t dissector_handle;
+    
+    DISSECTOR_ASSERT((proto_tracee = proto_get_id_by_filter_name("tracee")) != -1);
+
+    dissector_handle = create_dissector_handle(dissector, proto_tracee);
     dissector_add_string("tracee.eventName", event_name, dissector_handle);
 }
 
