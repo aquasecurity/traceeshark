@@ -6,6 +6,9 @@ extern const value_string dns_classes[];
 
 struct tracee_dissector_data {
     proto_tree *args_tree;
+    const gchar *event_name;
+    gboolean is_signature;
+    gint32 signature_severity;
 };
 
 enum field_type {
@@ -43,3 +46,4 @@ proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
 
 void register_tracee_enrichments(int proto);
+void register_tracee_statistics(void);

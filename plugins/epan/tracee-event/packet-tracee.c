@@ -5,6 +5,7 @@
 #include "../common.h"
 
 #include <epan/packet.h>
+#include <epan/tap.h>
 #include <epan/ipproto.h>
 #include <wiretap/wtap.h>
 #include <wsutil/wsjson.h>
@@ -21,6 +22,7 @@ const value_string packet_metadata_directions[] = {
 };
 
 static int proto_tracee = -1;
+static int tracee_tap;
 
 static dissector_table_t event_name_dissector_table;
 
@@ -393,7 +395,7 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     // add process entity ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processEntityId", &tmp_int));
     proto_tree_add_int64(process_tree, hf_process_entity_id, tvb, 0, 0, tmp_int);
-    
+
     // add thread entity ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadEntityId", &tmp_int));
     proto_tree_add_int64(process_tree, hf_thread_entity_id, tvb, 0, 0, tmp_int);
@@ -1986,7 +1988,8 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     }
 }
 
-static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    gchar *json_data, jsmntok_t *root_tok, struct tracee_dissector_data *data)
 {
     jsmntok_t *metadata_tok, *properties_tok;
     proto_item *metadata_item;
@@ -2026,6 +2029,7 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
     // add severity
     DISSECTOR_ASSERT((json_get_int(json_data, properties_tok, "Severity", &tmp_int)));
     proto_tree_add_int(properties_tree, hf_metadata_properties_severity, tvb, 0, 0, (gint32)tmp_int);
+    data->signature_severity = (gint32)tmp_int;
 
     // add technique
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, properties_tok, "Technique")) != NULL);
@@ -2097,6 +2101,7 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     // add event name
     DISSECTOR_ASSERT((event_name = json_get_string(json_data, root_tok, "eventName")) != NULL && strlen(event_name) > 0);
     proto_tree_add_string_wanted(tree, hf_event_name, tvb, 0, 0, event_name);
+    data->event_name = event_name;
     if (strlen(event_name) > 0)
         proto_item_append_text(item, ": %s", event_name);
     
@@ -2108,6 +2113,7 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
         is_signature = TRUE;
     tmp_item = proto_tree_add_boolean(tree, hf_is_signature, tvb, 0, 0, is_signature);
     proto_item_set_generated(tmp_item);
+    data->is_signature = is_signature;
 
     // add matched policies
     add_string_array(tvb, tree, hf_matched_policies, "Matched Policies",
@@ -2129,7 +2135,7 @@ static const gchar *dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, prot
     dissect_arguments(tvb, pinfo, tree, json_data, root_tok, event_name, TRUE, data);
 
     // add signature metadata fields
-    if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok)) != NULL)
+    if ((signature_name = dissect_metadata_fields(tvb, pinfo, tree, json_data, root_tok, data)) != NULL)
         col_prepend_fstr(pinfo->cinfo, COL_INFO, "%s. ", signature_name);
     
     return event_name;
@@ -2163,6 +2169,8 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     event_name = dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
 
     dissector_try_string(event_name_dissector_table, event_name, tvb, pinfo, tree, dissector_data);
+
+    tap_queue_packet(tracee_tap, pinfo, dissector_data);
 
     return tvb_captured_length(tvb);
 }
@@ -3118,6 +3126,8 @@ void proto_register_tracee(void)
     
     prefs_register_bool_preference(tracee_module, "container_image", "Show container image",
         "Whether to show the container image in the container column", &show_container_image);
+    
+    tracee_tap = register_tap("tracee");
 
     // initialize mapping of supported complex types and their dissection functions
     init_complex_types();
@@ -3143,4 +3153,6 @@ void proto_reg_handoff_tracee(void)
     
     // register to encapsulation dissector table (we use a user-reserved encapsulation)
     dissector_add_uint("wtap_encap", WTAP_ENCAP_USER0, tracee_json_handle);
+
+    register_tracee_statistics();
 }

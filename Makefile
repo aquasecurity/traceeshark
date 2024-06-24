@@ -15,6 +15,7 @@ copy-source:
         cp plugins/epan/tracee-event/packet-tracee.c wireshark/plugins/epan/tracee-event; \
         cp plugins/epan/tracee-event/enrichments.c wireshark/plugins/epan/tracee-event; \
         cp plugins/epan/tracee-event/wanted_fields.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-event/stats.c wireshark/plugins/epan/tracee-event; \
         cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/plugin.c wireshark/plugins/epan/tracee-event; \
         cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
