@@ -260,6 +260,7 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
         proto_item_set_generated(tmp_item);
     }
 
+    g_free(decoded_data);
     return 0;
 }
 
