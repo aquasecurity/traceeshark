@@ -38,7 +38,7 @@ add_compile_definitions(
 	$<$<BOOL:${HAVE_SSIZE_T}>:HAVE_SSIZE_T>
 )
 
-add_library(tracee-network-capture MODULE packet-tracee-network-capture.c ../wsjson_extensions.c)
+add_library(tracee-network-capture MODULE plugin.c packet-tracee-network-capture.c ../wsjson_extensions.c)
 set_target_properties(tracee-network-capture PROPERTIES
 	PREFIX ""
 	DEFINE_SYMBOL ""

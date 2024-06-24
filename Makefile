@@ -34,6 +34,7 @@ copy-source:
 		cp plugins/epan/tracee-event/process_tree.c wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/plugin.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-network-capture/plugin.c wireshark/plugins/epan/tracee-network-capture; \
 		cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
 	else \
 		error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
