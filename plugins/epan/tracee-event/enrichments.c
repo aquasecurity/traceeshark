@@ -223,8 +223,16 @@ static const char *stringify_decoded_data(packet_info *pinfo, guchar *decoded_da
 
 static const char *get_file_type(guchar *decoded_data, gsize len)
 {
-    if (len >= 4 && strncmp((const char *)decoded_data, "\x7f" "ELF", 4) == 0)
+    const char *data = (const char *)decoded_data;
+
+    if (len >= 4 && strncmp(data, "\x7F" "ELF", 4) == 0)
         return "ELF";
+    else if (len >= 2 && strncmp(data, "#!", 2) == 0)
+        return "Script";
+    else if (len >= 4 && strncmp(data, "\xED\xAB\xEE\xDB", 4) == 0)
+        return "RPM package";
+    else if (len >= 8 && strncmp(data, "!<arch>\x0A", 8) == 0)
+        return "DEB package";
     
     return NULL;
 }
