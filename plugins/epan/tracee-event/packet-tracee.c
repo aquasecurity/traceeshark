@@ -639,7 +639,7 @@ static void dynamic_hf_populate_arg_field(hf_register_info *hf, const gchar *eve
 
     hf->hfinfo.name = g_strdup(arg_name);
     name_normalized = normalize_arg_name(arg_name);
-    hf->hfinfo.abbrev = g_strdup_printf("tracee.args.%s", name_normalized);
+    hf->hfinfo.abbrev = g_strdup_printf("tracee.args.%s.%s", event_name, name_normalized);
     g_free(name_normalized);
 
     get_arg_field_type_display(type, &info, event_name, arg_name);
@@ -2587,7 +2587,7 @@ void proto_register_tracee(void)
     // dynamic fields needed by builtin filters
     static hf_register_info filter_hf[] = {
         { &hf_ptrace_request,
-          { "request", "tracee.args.request",
+          { "request", "tracee.args.ptrace.request",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },

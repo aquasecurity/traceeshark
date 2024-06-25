@@ -10,7 +10,7 @@ static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, prot
 {
     const gchar *pathname, *cmdline;
 
-    pathname = wanted_field_get_str("tracee.args.pathname");
+    pathname = wanted_field_get_str("tracee.args.sched_process_exec.pathname");
     cmdline = wanted_field_get_str("tracee.args.command_line");
 
     if (pathname && cmdline) {
@@ -142,7 +142,7 @@ static int enrich_security_socket_connect(tvbuff_t *tvb _U_, packet_info *pinfo,
 
 static int enrich_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    const gchar *alert = wanted_field_get_str("tracee.args.alert");
+    const gchar *alert = wanted_field_get_str("tracee.args.dynamic_code_loading.triggered_by.alert");
 
     if (alert)
         col_append_str(pinfo->cinfo, COL_INFO, alert);
@@ -152,7 +152,7 @@ static int enrich_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, pr
 
 static int enrich_fileless_execution(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    const gchar *pathname = wanted_field_get_str("tracee.args.pathname");
+    const gchar *pathname = wanted_field_get_str("tracee.args.fileless_execution.triggered_by.pathname");
 
     if (pathname)
         col_append_fstr(pinfo->cinfo, COL_INFO, "Running from %s", pathname);
@@ -165,9 +165,9 @@ static int enrich_stdio_over_socket(tvbuff_t *tvb _U_, packet_info *pinfo, proto
     gint *fd;
     const gchar *addr, *port, *stream;
 
-    fd = wanted_field_get_int("tracee.args.File_descriptor");
-    addr = wanted_field_get_str("tracee.args.IP_address");
-    port = wanted_field_get_str("tracee.args.Port");
+    fd = wanted_field_get_int("tracee.args.stdio_over_socket.File_descriptor");
+    addr = wanted_field_get_str("tracee.args.stdio_over_socket.IP_address");
+    port = wanted_field_get_str("tracee.args.stdio_over_socket.Port");
 
     if (fd && addr && port) {
         switch (*fd) {
@@ -248,7 +248,7 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
         return 0;
     }
 
-    bytes = wanted_field_get_str("tracee.args.bytes");
+    bytes = wanted_field_get_str("tracee.args.magic_write.bytes");
     if (bytes == NULL)
         return 0;
     
@@ -272,8 +272,8 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 
 static void register_wanted_fields(void)
 {
-    // needed for enrich_sched_process_exec and enrich_fileless_execution
-    register_wanted_field("tracee.args.pathname");
+    // needed for enrich_sched_process_exec
+    register_wanted_field("tracee.args.sched_process_exec.pathname");
     register_wanted_field("tracee.args.command_line");
 
     // needed for enrich_net_packet_http_request
@@ -298,27 +298,30 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.sockaddr.sun_path");
 
     // needed for enrich_dynamic_code_loading
-    register_wanted_field("tracee.args.alert");
+    register_wanted_field("tracee.args.dynamic_code_loading.triggered_by.alert");
+
+    // needed for enrich_fileless_execution
+    register_wanted_field("tracee.args.fileless_execution.triggered_by.pathname");
 
     // needed for enrich_stdio_over_socket
-    register_wanted_field("tracee.args.File_descriptor");
-    register_wanted_field("tracee.args.IP_address");
-    register_wanted_field("tracee.args.Port");
+    register_wanted_field("tracee.args.stdio_over_socket.File_descriptor");
+    register_wanted_field("tracee.args.stdio_over_socket.IP_address");
+    register_wanted_field("tracee.args.stdio_over_socket.Port");
 
     // needed for enrich_magic_write
-    register_wanted_field("tracee.args.bytes");
+    register_wanted_field("tracee.args.magic_write.bytes");
 }
 
 void register_tracee_enrichments(int proto)
 {
     static hf_register_info hf[] = {
         { &hf_decoded_data,
-          { "Decoded data", "tracee.args.decoded_data",
+          { "Decoded data", "tracee.args.magic_write.decoded_data",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
         { &hf_file_type,
-          { "File type", "tracee.args.file_type",
+          { "File type", "tracee.args.magic_write.file_type",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
