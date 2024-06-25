@@ -31,6 +31,11 @@ copy-source:
 
 # copy all project files to wireshark source tree
 copy-all:
+	@rm -r wireshark/plugins/epan/tracee-event
+	@rm -r wireshark/plugins/epan/tracee-network-capture
+	@rm wireshark/plugins/epan/common.h
+	@rm wireshark/plugins/epan/wsjson_extensions.c
+	@rm -r wireshark/plugins/wiretap/tracee-json
 	@cp -r plugins wireshark/
 	@cp CMakeListsCustom.txt wireshark/
 
