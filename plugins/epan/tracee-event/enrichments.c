@@ -270,6 +270,24 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     return 0;
 }
 
+static int enrich_security_file_open(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+{
+    const gchar *pathname, *syscall_pathname;
+
+    if ((syscall_pathname = wanted_field_get_str("tracee.args.security_file_open.syscall_pathname")) == NULL)
+        return 0;
+
+    col_add_fstr(pinfo->cinfo, COL_INFO, "Open %s", syscall_pathname);
+
+    if ((pathname = wanted_field_get_str("tracee.args.security_file_open.pathname")) == NULL)
+        return 0;
+    
+    if (strlen(pathname) > 0 && strcmp(pathname, syscall_pathname) != 0)
+        col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)", pathname);
+    
+    return 0;
+}
+
 static void register_wanted_fields(void)
 {
     // needed for enrich_sched_process_exec
@@ -310,6 +328,10 @@ static void register_wanted_fields(void)
 
     // needed for enrich_magic_write
     register_wanted_field("tracee.args.magic_write.bytes");
+
+    // needed for enrich_security_file_open
+    register_wanted_field("tracee.args.security_file_open.pathname");
+    register_wanted_field("tracee.args.security_file_open.syscall_pathname");
 }
 
 void register_tracee_enrichments(int proto)
@@ -354,4 +376,5 @@ void proto_reg_handoff_tracee_enrichments(void)
     register_tracee_event_enrichment("fileless_execution", enrich_fileless_execution);
     register_tracee_event_enrichment("stdio_over_socket", enrich_stdio_over_socket);
     register_tracee_event_enrichment("magic_write", enrich_magic_write);
+    register_tracee_event_enrichment("security_file_open", enrich_security_file_open);
 }
