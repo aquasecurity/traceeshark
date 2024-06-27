@@ -238,7 +238,7 @@ static const char *get_file_type(guchar *decoded_data, gsize len)
 static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data)
 {
     struct tracee_dissector_data *dissector_data = (struct tracee_dissector_data *)data;
-    const gchar *bytes;
+    const gchar *bytes, *pathname;
     guchar *decoded_data;
     gsize len;
     const char *decoded_string, *file_type;
@@ -248,8 +248,7 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
         return 0;
     }
 
-    bytes = wanted_field_get_str("tracee.args.magic_write.bytes");
-    if (bytes == NULL)
+    if ((bytes = wanted_field_get_str("tracee.args.magic_write.bytes")) == NULL)
         return 0;
     
     // decode written data
@@ -264,6 +263,11 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     if ((file_type = get_file_type(decoded_data, len)) != NULL) {
         tmp_item = proto_tree_add_string(dissector_data->args_tree, hf_file_type, tvb, 0, 0, file_type);
         proto_item_set_generated(tmp_item);
+    }
+
+    // set info column
+    if ((pathname = wanted_field_get_str("tracee.args.magic_write.pathname")) != NULL) {
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s magic written to %s", file_type != NULL ? file_type : "Unknown", pathname);
     }
 
     g_free(decoded_data);
@@ -328,6 +332,7 @@ static void register_wanted_fields(void)
 
     // needed for enrich_magic_write
     register_wanted_field("tracee.args.magic_write.bytes");
+    register_wanted_field("tracee.args.magic_write.pathname");
 
     // needed for enrich_security_file_open
     register_wanted_field("tracee.args.security_file_open.pathname");
