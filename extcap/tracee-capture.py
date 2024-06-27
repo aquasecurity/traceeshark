@@ -147,11 +147,14 @@ def load_preset(preset: str) -> str:
 
 
 def get_effective_tracee_options(args: argparse.Namespace) -> str:
+    options = ''
+
     if args.preset is not None and args.preset != 'none':
-        return load_preset(args.preset)
+        options += load_preset(args.preset)
     
     # add custom options
-    options = args.custom_tracee_options or ''
+    if args.custom_tracee_options:
+        options += f' {args.custom_tracee_options}'
 
     # add container scope
     container_scope = None
