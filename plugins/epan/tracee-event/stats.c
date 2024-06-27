@@ -80,7 +80,7 @@ void register_tracee_statistics(void)
 
     st_config = stats_tree_register_plugin("tracee", "tracee_events", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts",
         0, tracee_stats_tree_packet, tracee_stats_tree_init, NULL);
-	stats_tree_set_first_column_name(st_config, "Event Name");
+    stats_tree_set_first_column_name(st_config, "Event Name");
 #else // old stats tree API
     stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
         0, tracee_stats_tree_packet, tracee_stats_tree_init, NULL);

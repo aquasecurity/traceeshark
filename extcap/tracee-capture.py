@@ -359,6 +359,7 @@ def show_config(reload_option: Optional[str]):
         ConfigVal(arg=id_process_scope, value='follow', display='Follow descendants (of specified process name or executable)'),
         ConfigVal(arg=id_event_sets, value='default', display='default', enabled='true'),
         ConfigVal(arg=id_event_sets, value='signatures', display='signatures', enabled='true'),
+        ConfigVal(arg=id_event_sets, value='packets', display='packets', enabled='true'),
         ConfigVal(arg=id_event_sets, value='syscalls', display='syscalls', enabled='true'),
         ConfigVal(arg=id_event_sets, value='network_events', display='network_events', enabled='true'),
         ConfigVal(arg=id_event_sets, value='32bit_unique', display='32bit_unique', enabled='true', parent='syscalls'),
