@@ -1,4 +1,4 @@
---events signatures,packets \
+--events signatures \
 --events sched_process_exec,sched_process_fork,sched_process_exit,kill \
 --events security_kernel_read_file,dirty_pipe_splice,kallsyms_lookup_name,call_usermodehelper,hidden_kernel_module \
 --events magic_write,file_modification,security_file_open,security_inode_unlink,security_sb_mount,shared_object_loaded,mknod,chroot,memfd_create,memfd_secret \
