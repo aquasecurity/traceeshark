@@ -1,6 +1,6 @@
 # Traceeshark
 
-![](traceeshark.png)
+![](images/traceeshark_256x256.png)
 
 1. [Getting started](#getting-started)
 
