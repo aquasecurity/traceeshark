@@ -44,7 +44,6 @@ READER_COMM = 'tracee-capture'
 GENERAL_GROUP = 'General'
 REMOTE_GROUP = 'Remote capture'
 TRACEE_OPTIONS_GROUP = 'Tracee options'
-PRESET_GROUP = 'Preset control'
 
 DEFAULT_CAPTURE_TYPE = 'local'
 DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:latest'
@@ -149,7 +148,9 @@ def load_preset(preset: str) -> str:
 def get_effective_tracee_options(args: argparse.Namespace) -> str:
     options = ''
 
-    if args.preset is not None and args.preset != 'none':
+    if args.preset_file is not None:
+        options += load_preset(args.preset_file)
+    elif args.preset is not None and args.preset != 'none':
         options += load_preset(args.preset)
     
     # add custom options
@@ -276,8 +277,17 @@ def show_config(reload_option: Optional[str]):
         ConfigArg(call='--ssh-passphrase', display='SSH key passphrase', type='password',
             group=REMOTE_GROUP
         ),
-        ConfigArg(call='--custom-tracee-options', display='Custom tracee options', type='string',
-            tooltip='Command line options for tracee',
+        ConfigArg(call='--preset', display='Preset', type='selector',
+            tooltip='Tracee options preset',
+            group=TRACEE_OPTIONS_GROUP,
+            reload='true',
+            placeholder='Reload presets'
+        ),
+        ConfigArg(call='--preset-file', display='Preset file', type='fileselect',
+            group=TRACEE_OPTIONS_GROUP
+        ),
+        ConfigArg(call='--custom-tracee-options', display='Custom Tracee options', type='string',
+            tooltip='Command line options for Tracee',
             group=TRACEE_OPTIONS_GROUP
         ),
         ConfigArg(call='--container-scope', display='Container scope', type='radio',
@@ -319,26 +329,6 @@ def show_config(reload_option: Optional[str]):
             tooltip='If capturing packets, inject them into the event stream at an interval given in seconds, or 0 for no packet injection',
             group=TRACEE_OPTIONS_GROUP
         ),
-        ConfigArg(call='--preset', display='Preset', type='selector',
-            tooltip='Tracee options preset',
-            group=PRESET_GROUP,
-            reload='true',
-            placeholder='Reload presets'
-        ),
-        ConfigArg(call='--preset-file', display='Preset file', type='fileselect',
-            group=PRESET_GROUP
-        ),
-        ConfigArg(call='--preset-from-file', display='Update preset from file', type='selector',
-            tooltip='Update existing preset or create new preset from the above selected file',
-            group=PRESET_GROUP,
-            reload='true',
-            placeholder='Update'
-        ),
-        ConfigArg(call='--delete-preset', display='Delete preset', type='selector',
-            group=PRESET_GROUP,
-            reload='true',
-            placeholder='Delete'    
-        )
     ]
 
     id_capture_type = ConfigArg.id_from_call('--capture-type')
@@ -347,8 +337,6 @@ def show_config(reload_option: Optional[str]):
     id_event_sets = ConfigArg.id_from_call('--event-sets')
     id_capture = ConfigArg.id_from_call('--capture-artifacts')
     id_preset = ConfigArg.id_from_call('--preset')
-    id_preset_from_file = ConfigArg.id_from_call('--preset-from-file')
-    id_delete_preset = ConfigArg.id_from_call('--delete-preset')
 
     values: List[ConfigVal] = [
         ConfigVal(arg=id_capture_type, value='local', display='Local', default='true'),
@@ -417,19 +405,9 @@ def show_config(reload_option: Optional[str]):
     ]
 
     if reload_option is None or reload_option == 'preset':
-        values.append(ConfigVal(arg=id_preset, value='none', display=f'No preset (use "{TRACEE_OPTIONS_GROUP}" tab)', default='false'))
+        values.append(ConfigVal(arg=id_preset, value='none', display=f'No preset', default='false'))
         for preset in presets:
             values.append(ConfigVal(arg=id_preset, value=preset, display=preset, default='true' if preset == 'Default' else 'false'))
-    
-    if reload_option is None or reload_option == 'preset-from-file':
-        values.append(ConfigVal(arg=id_preset_from_file, value='new', display='New preset (uses file name)', default='true'))
-        for preset in presets:
-            values.append(ConfigVal(arg=id_preset_from_file, value=preset, display=preset, default='false'))
-    
-    if reload_option is None or reload_option == 'delete-preset':
-        values.append(ConfigVal(arg=id_delete_preset, value='none', display='', default='true'))
-        for preset in presets:
-            values.append(ConfigVal(arg=id_delete_preset, value=preset, display=preset))
 
     if reload_option is None:
         for arg in args:
@@ -1001,7 +979,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
 
     command = 'docker run -d'
 
-    # when not using docker for Windows or Mac, we connect tracee to the local network
+    # when not using docker for Windows or Mac, we connect Tracee to the local network
     if not local or (local and LINUX):
         command += f' --network=host'
         data_addr = '127.0.0.1'
@@ -1069,12 +1047,12 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
 
 
 def prepare_local_capture(args: argparse.Namespace):
-    # create empty file to get logs from tracee
+    # create empty file to get logs from Tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
     open(args.logfile, 'w').close()
 
-    # create directory for tracee output files
+    # create directory for Tracee output files
     if os.path.isdir(args.output_dir):
         shutil.rmtree(args.output_dir)
     elif os.path.isfile(args.output_dir):
@@ -1084,13 +1062,13 @@ def prepare_local_capture(args: argparse.Namespace):
 
 
 def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp: SFTPManager) -> int:
-    # remove preexisting tracee logs file
+    # remove preexisting Tracee logs file
     if os.path.isdir(args.logfile):
         shutil.rmtree(args.logfile)
     elif os.path.isfile(args.logfile):
         os.remove(args.logfile)
     
-    # remove preexisting tracee output directory
+    # remove preexisting Tracee output directory
     if os.path.isdir(args.output_dir):
         shutil.rmtree(args.output_dir)
     elif os.path.isfile(args.output_dir):
@@ -1128,16 +1106,16 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     )
     ssh_data_forwarder.start()
 
-    # create empty tracee logs file to be mounted into the tracee container
+    # create empty Tracee logs file to be mounted into the Tracee container
     # (this is necessary because if it doesn't exist, docker will assume it needs to be a directory)
     _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
     if returncode != 0:
-        error(f'error creating file for tracee logs, stderr dump:\n{err}')
+        error(f'error creating file for Tracee logs, stderr dump:\n{err}')
     
-    # create directory for tracee output files
+    # create directory for Tracee output files
     _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_OUTPUT_DIR} && mkdir {REMOTE_CAPTURE_OUTPUT_DIR} && chmod g+ws {REMOTE_CAPTURE_OUTPUT_DIR}')
     if returncode != 0:
-        error(f'error creating output directory for tracee, stderr dump:\n{err}')
+        error(f'error creating output directory for Tracee, stderr dump:\n{err}')
     
     # copy new container entrypoint
     sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
@@ -1224,14 +1202,14 @@ def tracee_capture(args: argparse.Namespace):
     packet_injector_th = Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
     packet_injector_th.start()
 
-    # run tracee container
+    # run Tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
     out, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
         error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
     container_id = out.rstrip('\n')
 
-    # wait until tracee exits (triggered by stop_capture or by an error)
+    # wait until Tracee exits (triggered by stop_capture or by an error)
     command = f'docker wait {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
@@ -1250,7 +1228,7 @@ def tracee_capture(args: argparse.Namespace):
             control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, f'Injecting packets from {pcap_desc}')
         control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
 
-    # copy tracee logs file and output directory
+    # copy Tracee logs file and output directory
     if not local:
         sftp.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
         sftp.remove(REMOTE_CAPTURE_LOGFILE)
@@ -1270,7 +1248,7 @@ def tracee_capture(args: argparse.Namespace):
     if container_id is None:
         return
     
-    # check tracee logs for errors
+    # check Tracee logs for errors
     logs_err = ''
     command = f'docker logs {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
@@ -1280,7 +1258,7 @@ def tracee_capture(args: argparse.Namespace):
     else:
         logs_err = err
     
-    # remove tracee container
+    # remove Tracee container
     command = f'docker rm {container_id}'
     _, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0 and 'No such container' not in err and 'is already in progress' not in err:
@@ -1288,18 +1266,6 @@ def tracee_capture(args: argparse.Namespace):
     
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
-
-
-def handle_reload(option: str, args: argparse.Namespace):
-    # copy selected file to presets dir
-    if option == 'preset-from-file' and args.preset_file is not None:
-        presets_dir = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets')
-        dst_file = args.preset_from_file if args.preset_from_file != 'new' else args.preset_file
-        shutil.copyfile(args.preset_file, os.path.join(presets_dir, os.path.basename(dst_file)))
-    
-    elif option == 'delete-preset' and args.delete_preset is not None and args.delete_preset != 'none':
-        preset_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets', args.delete_preset)
-        os.remove(preset_file)
 
 
 def main():
@@ -1344,8 +1310,6 @@ def main():
     parser.add_argument('--packet-injection-interval', type=int, default=DEFAULT_PACKET_INJECTION_INTERVAL)
     parser.add_argument('--preset', type=str)
     parser.add_argument('--preset-file', type=str)
-    parser.add_argument('--preset-from-file', type=str)
-    parser.add_argument('--delete-preset', type=str)
 
     args = parser.parse_args()
 
@@ -1359,9 +1323,6 @@ def main():
     
     if not args.extcap_interfaces and args.extcap_interface is None:
         parser.exit('An interface must be provided or the selection must be displayed')
-    
-    if args.extcap_reload_option is not None:
-        handle_reload(args.extcap_reload_option, args)
     
     if args.extcap_config:
         show_config(args.extcap_reload_option)
