@@ -66,27 +66,29 @@ When using Traceeshark for the first time, the Tracee configuration profile shou
 
 ### Live capture
 
-Tracee live capture is implemented as an external capture program ("extcap" in Wireshark terminology). It is listed as "Tracee capture" together with regular network interfaces on the main screen. It has a settings icon next to it which allows managing Tracee's options before starting the capture.
+Tracee live capture is implemented as an external capture program ("extcap" in Wireshark terminology). It is listed as ***Tracee capture*** together with regular network interfaces on the main screen. It has a settings icon next to it which allows managing Tracee's options before starting the capture.
 
-#### Preset system
+#### Tracee options
 
-The preset system allows defining a set of options for Tracee that will be used when performing a live capture. It can be managed from the "Preset control" tab in the configuration window. Use the "Preset" field to select which preset should be used for the capture. The ***Default*** preset which is installed with Traceeshark contains a set of useful events for a generic analysis use-case.
+To control what will be captured, the ***Tracee options*** tab can be used. Tracee options can be controlled by selecting a preset, by manually specifying command line options for Tracee, and by using the various selections available.
 
-Instead of selecting a pre-registered preset, a custom preset file can be used instead. A preset file simply contains all of Tracee's command line arguments.
+##### Presets
 
-A custom preset file can be registered to the preset list using the "Update preset from file" option. With this option a new preset can be registered based on the name of the selected file, or an existing preset can be updated.
+Presets allow defining a set of options for Tracee that will be used when performing a live capture. Use the ***Preset*** field to select which registered preset should be used for the capture, or select a custom preset file instead using the ***Preset file*** field. The `Default` preset which is installed with Traceeshark contains a set of useful events for a generic analysis use-case.
 
-Additionally, a registered preset can be deleted using the "Delete preset" option.
+A preset file simply contains all of Tracee's command line arguments. It can either be selected directly, or placed in the preset directory for it to be listed in the preset selection.
 
-:information_source: After registering/updating/deleting a preset, the preset list needs to be updated using the "Reload presets" button. The preset lists in "Update preset from file" and "Delete preset" do not update from operations performed by a different option, they will only be updated after reopening the configuration window.
+The preset directory is at `~/.local/lib/wireshark/extcap/tracee-capture/presets` on Linux and Mac and at `%APPDATA%\Wireshark\extcap\tracee-capture\presets` on Windows.
 
-#### Manually configured options
+:information_source: If you're using Wireshark 4.0.x or older on Linux/Mac, the preset directory will be at `~/.config/wireshark/extcap/tracee-capture/presets`.
 
-Tracee options can be configured manually using the "Tracee options" tab. It allows to select which event sets to trace, the tracing scope (which processes and containers should be traced) and which artifacts to capture.
+##### Manually configured options
 
-If a more advanced option is desired, the text box at the top allows specifying Tracee command line options directly.
+Tracee options can also be configured manually. The ***Tracee options*** tab allows to select which event sets to trace, the tracing scope (which processes and containers should be traced) and which artifacts to capture.
 
-:information_source: Any options configured in this tab will be used along with the preset, if selected.
+If a more advanced option is desired, the text box labeled ***Custom Tracee options*** allows specifying Tracee command line options directly.
+
+:information_source: Any options configured will be used along with the preset, if selected.
 
 ## Build from source
 
