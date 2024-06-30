@@ -1,8 +1,18 @@
 # Traceeshark
 
-## Installation
+![](traceeshark.png)
 
-First, make sure you have Wireshark installed and updated to the latest version.
+1. [Getting started](#getting-started)
+
+2. [Basic usage](#basic-usage)
+
+3. [Build from source](#build-from-source)
+
+## Getting started
+
+The simplest way to install Traceeshark is using the autoinstall script.
+
+First, make sure you have Python 3 installed, and your Wireshark installation is updated to the latest version.
 
 Then, simply run the following command:
 
@@ -18,15 +28,7 @@ $outFile = [System.IO.Path]::GetTempFileName() ; Invoke-WebRequest -Uri "https:/
 outfile=$(mktemp) && curl -s "https://raw.githubusercontent.com/aquasecurity/traceeshark/main/autoinstall.py" > $outfile && python3 $outfile && rm $outfile
 ```
 
-#### Manual installation
-
-Traceeshark can be installed using a release containing the plugins and other required files.
-
-Installations are per Wireshark version and may not work with other versions. Download the appropriate release, unzip it, and run the installation script (`install.ps1` on Windows and `install.sh` on Linux/Mac)
-
-:warning: The installation scripts must be run from within their directory
-
-Now the plugins should be available using your installed Wireshark.
+:information_source: Note that Traceeshark is compiled for a specific Wireshark verison. If you are using a Linux distribution with an outdated Wireshark package, the prebuilt releases of Traceeshark may not work. Ubuntu 22.04 and 24.04 have a dedicated release for their Wireshark package version.
 
 ### Setup for live capture
 
@@ -48,19 +50,29 @@ sudo usermod -aG docker <user>
 
 On Windows and Mac, make sure docker desktop is installed and your user can run containers.
 
+### Manual installation
+
+Traceeshark can be installed using a release containing the plugins and other required files.
+
+Installations are per Wireshark version and may not work with other versions. Download the appropriate release, unzip it, and run the installation script (`install.ps1` on Windows and `install.sh` on Linux/Mac)
+
+:warning: The installation scripts must be run from within their directory
+
+Now the plugins should be available to your Wireshark installation.
+
 ## Basic usage
 
-When using for the first time, the Tracee configuration profile needs to be applied, which defines the custom column view and the event colors. Go to `Edit -> Configuration Profiles...` and select the "Tracee" profile.
+When using Traceeshark for the first time, the Tracee configuration profile should be applied. The profile defines the custom column view, the event colors and some quick-filter buttons. Go to `Edit -> Configuration Profiles...` and select the "Tracee" profile.
 
 ### Live capture
 
-Tracee live capture is implemented as an external capture program ("extcap" in Wireshark terminology). It is listed as "Tracee: capture" together with regular network interfaces on the main screen. It has a settings icon next to it which allows managing Tracee's options before starting the capture.
+Tracee live capture is implemented as an external capture program ("extcap" in Wireshark terminology). It is listed as "Tracee capture" together with regular network interfaces on the main screen. It has a settings icon next to it which allows managing Tracee's options before starting the capture.
 
 #### Preset system
 
-Currently, persistent management of runtime configuration for Tracee is available using a preset system, configurable via the "Preset control" tab in the configuration window. Use the "Preset" field to select which preset should be used for the capture. If the "No preset" option is specfied, the "Tracee options" tab will be used for manually specifying the options.
+The preset system allows defining a set of options for Tracee that will be used when performing a live capture. It can be managed from the "Preset control" tab in the configuration window. Use the "Preset" field to select which preset should be used for the capture. The ***Default*** preset which is installed with Traceeshark contains a set of useful events for a generic analysis use-case.
 
-Instead of selecting a pre-registered preset, a custom preset file can be used instead. A preset file simply contains all of Tracee's command line arguments in one line.
+Instead of selecting a pre-registered preset, a custom preset file can be used instead. A preset file simply contains all of Tracee's command line arguments.
 
 A custom preset file can be registered to the preset list using the "Update preset from file" option. With this option a new preset can be registered based on the name of the selected file, or an existing preset can be updated.
 
@@ -70,7 +82,11 @@ Additionally, a registered preset can be deleted using the "Delete preset" optio
 
 #### Manually configured options
 
-Tracee options can be configured manually using the "Tracee options" tab. Currently the only way to specifty options is by entering Tracee's command line options directly (or leaving it blank for no options). In the future, options will be able to be selected interactively.
+Tracee options can be configured manually using the "Tracee options" tab. It allows to select which event sets to trace, the tracing scope (which processes and containers should be traced) and which artifacts to capture.
+
+If a more advanced option is desired, the text box at the top allows specifying Tracee command line options directly.
+
+:information_source: Any options configured in this tab will be used along with the preset, if selected.
 
 ## Build from source
 
