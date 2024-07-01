@@ -102,6 +102,16 @@ If a more advanced option is desired, the text box labeled ***Custom Tracee opti
 
 :information_source: Any options configured will be used along with the preset, if selected.
 
+#### Interface Toolbar
+
+Clicking `View -> Interface Toolbars` and selecting the "Tracee" option will add a toolbar to the Window. This toolbar can be used for controlling the Tracee live capture.
+
+When running a remote capture, the ***Copy output*** button will copy the output folder  containing captured artifacts and Tracee logs to your computer. They will be placed at `/tmp/traceeshark` on Linux/Mac and at `%APPDATA%\Traceeshark` on Windows, unless configured otherwise in the capture settings.
+
+The ***Copy output on stop*** checkbox specifies whether the output folder should be copied automatically when the capture stops. Note that it will only be copied if the capture was stopped using the toolbar's ***Stop*** button, and not Wireshark's red stop button!
+
+:warning: The ***Stop*** button is the preferred way to stop Tracee live captures. This is because the way Wireshark stops captures on Windows and Mac is unreliable and may prevent proper cleanup from happening.
+
 ## Build from source
 
 The general flow of building Traceeshark is as follows:

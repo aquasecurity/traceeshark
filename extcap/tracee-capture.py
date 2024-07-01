@@ -1338,6 +1338,7 @@ if __name__ == '__main__':
     #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
     #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr.flush()
+    
     try:
         main()
     # RuntimeError is raised by the error() function which already printed
