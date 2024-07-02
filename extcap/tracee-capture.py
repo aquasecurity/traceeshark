@@ -494,7 +494,7 @@ def set_proc_name(newname: str):
 def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
     ssh_client = paramiko.SSHClient()
     ssh_client.load_system_host_keys()
-    ssh_client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    ssh_client.set_missing_host_key_policy(paramiko.MissingHostKeyPolicy())
 
     try:
         ssh_client.connect(
@@ -509,6 +509,9 @@ def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
     
     except paramiko.SSHException as ex:
         error(str(ex))
+    
+    except TimeoutError:
+        error('SSH connection timed out')
     
     # there is a bug where paramiko tries to interpret an RSA key as a DSS key,
     # this only seems to happen when the key is invalid for this connection
@@ -1031,7 +1034,7 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
                 if len(data) == 0:
                     break
                 channel.send(data)
-            except ConnectionResetError:
+            except (ConnectionResetError, ConnectionAbortedError):
                 break
         if channel in r:
             try:
@@ -1039,7 +1042,7 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
                 if len(data) == 0:
                     break
                 sock.send(data)
-            except ConnectionResetError:
+            except (ConnectionResetError, ConnectionAbortedError):
                 break
     
     channel.close()
@@ -1173,10 +1176,7 @@ def tracee_capture(args: argparse.Namespace):
         sshd_pid = None
         prepare_local_capture(args)
     else:
-        try:
-            ssh_client = ssh_connect(args)
-        except TimeoutError:
-            error('SSH connection timed out')
+        ssh_client = ssh_connect(args)
         sftp = SFTPManager(ssh_client.open_sftp())
         sshd_pid = prepare_remote_capture(args, ssh_client, sftp)
     
@@ -1349,3 +1349,5 @@ if __name__ == '__main__':
     except Exception:
         stop_capture(is_error=True)
         raise
+    finally:
+        sys.stderr.flush()
