@@ -1015,6 +1015,8 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
 
 
 def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: int):
+    global running
+
     # wait for incoming connection
     channel = transport.accept(None)
 
@@ -1026,24 +1028,18 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
         sys.stderr.write(f'could not connect to {(dst_addr, dst_port)}\n')
         return
     
-    while True:
+    while running:
         r, _, _ = select([sock, channel], [], [])
         if sock in r:
-            try:
-                data = sock.recv(1024)
-                if len(data) == 0:
-                    break
-                channel.send(data)
-            except (ConnectionResetError, ConnectionAbortedError):
-                break
+            data = sock.recv(TRACEE_OUTPUT_BUF_CAPACITY)
+            if len(data) == 0:
+                continue
+            channel.send(data)
         if channel in r:
-            try:
-                data = channel.recv(1024)
-                if len(data) == 0:
-                    break
-                sock.send(data)
-            except (ConnectionResetError, ConnectionAbortedError):
-                break
+            data = channel.recv(TRACEE_OUTPUT_BUF_CAPACITY)
+            if len(data) == 0:
+                continue
+            sock.send(data)
     
     channel.close()
     sock.close()
