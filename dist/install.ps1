@@ -49,7 +49,7 @@ if (Get-Command "wireshark" -ErrorAction SilentlyContinue) {
     }
 }
 
-$wsVersionParts = $wsVersionExists -split '\.'
+$wsVersionParts = $wsVersionWanted -split '\.'
 $wsShortVersion = $wsVersionParts[0] + '.' + $wsVersionParts[1]
 
 

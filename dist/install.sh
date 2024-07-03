@@ -21,7 +21,7 @@ mkdir -p $HOME/.config/wireshark/profiles
 cp -r profiles/Tracee $HOME/.config/wireshark/profiles/
 echo "[*] Installed profile to $HOME/.config/wireshark/profiles/Tracee"
 
-WS_VERSION_SHORT=$(echo $WS_VERSION_EXISTS | grep -o -E "[0-9]+\.[0-9]+")
+WS_VERSION_SHORT=$(echo $WS_VERSION_WANTED | grep -o -E "[0-9]+\.[0-9]+")
 if [[ $WS_VERSION_SHORT < "4.3" ]]; then
     if [ "$OS_NAME" == "Linux" ]; then
         WS_VERSION_DIR=$WS_VERSION_SHORT
