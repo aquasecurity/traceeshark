@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, TextIO, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -74,6 +74,7 @@ CTRL_ARG_COPY_OUTPUT    = 4
 CTRL_ARG_INJECT_PACKETS = 5
 
 
+capture_errors: TextIO = None
 args: argparse.Namespace = None
 container_id: str = None
 running: bool = True
@@ -968,6 +969,9 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
 
 
 def error(msg: str) -> NoReturn:
+    global capture_errors
+
+    capture_errors.write(f'{msg}\n')
     sys.stderr.write(f'{msg}\n')
     stop_capture(is_error=True)
     raise RuntimeError()
@@ -1025,8 +1029,7 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
     try:
         sock.connect((dst_addr, dst_port))
     except ConnectionRefusedError:
-        sys.stderr.write(f'could not connect to {(dst_addr, dst_port)}\n')
-        return
+        error(f'could not connect to {(dst_addr, dst_port)}\n')
     
     while running:
         r, _, _ = select([sock, channel], [], [])
@@ -1331,9 +1334,10 @@ def main():
 
 
 if __name__ == '__main__':
-    #sys.stderr = open(os.path.join(TMP_DIR, 'capture_stderr.log'), 'w')
     #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr.flush()
+
+    capture_errors = open(os.path.join(TMP_DIR, 'capture_errors.txt'), 'w')
     
     try:
         main()
@@ -1347,3 +1351,4 @@ if __name__ == '__main__':
         raise
     finally:
         sys.stderr.flush()
+        capture_errors.flush()
