@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, TextIO, Tuple
+from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
 
 import argparse
 from ctypes import cdll, byref, create_string_buffer
@@ -14,7 +14,8 @@ import struct
 import subprocess as subp
 import sys
 from threading import Lock, Thread
-from time import sleep
+import time
+import traceback
 
 import msgpack
 import paramiko
@@ -72,9 +73,9 @@ CTRL_ARG_COPY_ON_STOP   = 2
 CTRL_ARG_INJECT_PACKETS_ON_STOP = 3
 CTRL_ARG_COPY_OUTPUT    = 4
 CTRL_ARG_INJECT_PACKETS = 5
+CTRL_ARG_LOGGER = 6
 
 
-capture_errors: TextIO = None
 args: argparse.Namespace = None
 container_id: str = None
 running: bool = True
@@ -97,6 +98,7 @@ def show_interfaces():
     print("control {number=%d}{type=boolean}{display=Inject packets on stop}{default=true}{tooltip=Inject packets when stopping the capture}" % CTRL_ARG_INJECT_PACKETS_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
     print("control {number=%d}{type=button}{display=Inject packets}{tooltip=Inject packets captured by Tracee into the capture stream}" % CTRL_ARG_INJECT_PACKETS)
+    print("control {number=%d}{type=button}{role=logger}{display=Show Log}{tooltip=Show capture log}" % CTRL_ARG_LOGGER)
 
 
 class ConfigArg:
@@ -532,6 +534,8 @@ def stop_capture(is_error: bool = False):
     running = False
 
     if container_id is not None:
+        log("Stopping capture...")
+
         ssh_client = None
         if not local:
             ssh_client = ssh_connect(args)
@@ -551,6 +555,8 @@ def stop_capture(is_error: bool = False):
             # set this so if the main thread is still functioning,
             # it will not try to read the container's logs and remove it
             container_id = None
+
+            log("Capture stopped")
 
 
 def read_output(data_output_manager: DataOutputManager):
@@ -814,6 +820,9 @@ class ControlOutputManager:
     def __init__(self, control_outf: BinaryIO):
         self._control_outf = control_outf
         self._lock = Lock()
+
+        self._control_write(CTRL_ARG_LOGGER, CTRL_CMD_SET, b'')
+        self.write_log_message("Capture started")
     
     def disable_button(self, button: int):
         self._control_write(button, CTRL_CMD_DISABLE, b'')
@@ -823,6 +832,9 @@ class ControlOutputManager:
     
     def set_button_text(self, button: int, text: str):
         self._control_write(button, CTRL_CMD_SET, text.encode())
+    
+    def write_log_message(self, message: str):
+        self._control_write(CTRL_ARG_LOGGER, CTRL_CMD_ADD, f'{time.strftime("%Y-%m-%d %H:%M:%S")}: {message}\n'.encode())
 
     def _control_write(self, arg: int, cmd: int, payload: bytes):
         msg = bytearray()
@@ -882,10 +894,12 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
         elif arg == CTRL_ARG_COPY_OUTPUT and not local:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
+            log("Copying output folder...")
             for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, output_dir):
                 control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copy output')
             control_output_manager.enable_button(CTRL_ARG_COPY_OUTPUT)
+            log("Done copying output folder")
         
         elif arg == CTRL_ARG_INJECT_PACKETS:
             control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
@@ -918,7 +932,7 @@ def periodic_packet_injector(control_output_manager: ControlOutputManager, packe
     if not any(['network' in artifact for artifact in args.capture_artifacts.split(',')]):
         return
     
-    sleep(interval)
+    time.sleep(interval)
 
     while running:
         control_output_manager.disable_button(CTRL_ARG_INJECT_PACKETS)
@@ -929,7 +943,7 @@ def periodic_packet_injector(control_output_manager: ControlOutputManager, packe
         control_output_manager.set_button_text(CTRL_ARG_INJECT_PACKETS, 'Inject packets')
         control_output_manager.enable_button(CTRL_ARG_INJECT_PACKETS)
 
-        sleep(interval)
+        time.sleep(interval)
 
 
 def packet_injector_thread(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
@@ -968,11 +982,17 @@ def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = Non
     return send_ssh_command(ssh_client, command)
 
 
-def error(msg: str) -> NoReturn:
-    global capture_errors
+def log(msg: str):
+    global control_output_manager
 
-    capture_errors.write(f'{msg}\n')
+    if control_output_manager is not None:
+        control_output_manager.write_log_message(msg)
+
+
+def error(msg: str) -> NoReturn:
     sys.stderr.write(f'{msg}\n')
+    log(f'ERROR: {msg}')
+    
     stop_capture(is_error=True)
     raise RuntimeError()
 
@@ -1077,10 +1097,12 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         os.remove(args.output_dir)
     
     # prepare ssh tunnel to receive output
+    log("Connecting to remote server...")
     ssh_data_client = ssh_connect(args)
 
     # on Windows, the previous capture doesn't terminate before the current one when restarting the capture,
     # so we have to wait a bit to give the previous capture a chance to clean up its forwarded ports
+    log("Setting up SSH tunnel...")
     for i in range(10):
         try:
             ssh_data_client.get_transport().request_port_forward('127.0.0.1', DATA_PORT)
@@ -1094,7 +1116,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
                 if i == 9:
                     error(str(ex))
                 # retry in 1 second
-                sleep(1)
+                time.sleep(1)
             # unrelated error
             else:
                 error(str(ex))
@@ -1140,13 +1162,14 @@ def tracee_capture(args: argparse.Namespace):
     # This is done because Wireshark hangs if the extcap dies before the control pipes were opened.
     control_outf = open(args.extcap_control_out, 'wb')
     control_inf = open(args.extcap_control_in, 'rb')
+    control_output_manager = ControlOutputManager(control_outf)
 
     # Initialize the output before anything that can fail runs. This is done because Wireshark enters
     # a corrupt state if the extcap dies before a pcap/pcapng header was written to the output pipe.
     data_output_manager = DataOutputManager(args.fifo)
 
     # sleep to let Wireshark's initial message to arrive, otherwise Wireshark displays an error if we immediately exit and don't receive the message
-    sleep(0.1)
+    time.sleep(0.1)
 
     if args.capture_type == 'local':
         local = True
@@ -1185,8 +1208,7 @@ def tracee_capture(args: argparse.Namespace):
         if returncode != 0 and 'No such container' not in err:
             error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
     
-    # initialize control output manager and packet injector
-    control_output_manager = ControlOutputManager(control_outf)
+    # initialize packet injector
     packet_injector = PacketInjector(data_output_manager, sftp, args.output_dir)
     
     # start toolbar control thread
@@ -1203,6 +1225,7 @@ def tracee_capture(args: argparse.Namespace):
 
     # run Tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
+    log("Starting Tracee...")
     out, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
         error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
@@ -1236,6 +1259,7 @@ def tracee_capture(args: argparse.Namespace):
         if copy_output:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
             control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, 'Copying output folder...')
+            log("Copying output folder...")
             for path in sftp.copy_dir_from_remote(REMOTE_CAPTURE_OUTPUT_DIR, args.output_dir):
                 control_output_manager.set_button_text(CTRL_ARG_COPY_OUTPUT, f'Copying {path.removeprefix(f"{REMOTE_CAPTURE_OUTPUT_DIR}/")}')
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
@@ -1263,8 +1287,12 @@ def tracee_capture(args: argparse.Namespace):
     if returncode != 0 and 'No such container' not in err and 'is already in progress' not in err:
         error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
     
+    container_id = None
+    
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
+    
+    log("Capture stopped")
 
 
 def main():
@@ -1336,19 +1364,17 @@ def main():
 if __name__ == '__main__':
     #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr.flush()
-
-    capture_errors = open(os.path.join(TMP_DIR, 'capture_errors.txt'), 'w')
     
     try:
         main()
-    # RuntimeError is raised by the error() function which already printed
-    # an error message, don't raise it so the error screen is not cluttered
+    # RuntimeError is raised by the error() function which already printed an error
+    # message and stopped the capture, don't raise it so the error screen is not cluttered
     except RuntimeError:
+        pass
+    # any other exception needs to be printed
+    except Exception as ex:
+        sys.stderr.write(f'Exception: {str(ex)}\n')
+        log(f"Exception:\n{traceback.format_exc()}")
         stop_capture(is_error=True)
-    # any other exception needs to be raised
-    except Exception:
-        stop_capture(is_error=True)
-        raise
     finally:
         sys.stderr.flush()
-        capture_errors.flush()
