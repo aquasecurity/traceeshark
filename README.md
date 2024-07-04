@@ -112,6 +112,10 @@ The ***Copy output on stop*** checkbox specifies whether the output folder shoul
 
 :warning: The ***Stop*** button is the preferred way to stop Tracee live captures. This is because the way Wireshark stops captures on Windows and Mac is unreliable and may prevent proper cleanup from happening.
 
+The ***Log*** button will display log messages from the capture program. It can be useful for determining if the capture is running if no events are arriving.
+
+:information_source: When running live capture for the first time, Tracee's docker image needs to be pulled from Docker Hub. This is indicated in the capture log.
+
 ## Build from source
 
 The general flow of building Traceeshark is as follows:

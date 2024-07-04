@@ -100,7 +100,7 @@ def show_interfaces():
     print("control {number=%d}{type=boolean}{display=Inject packets on stop}{default=true}{tooltip=Inject packets when stopping the capture}" % CTRL_ARG_INJECT_PACKETS_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
     print("control {number=%d}{type=button}{display=Inject packets}{tooltip=Inject packets captured by Tracee into the capture stream}" % CTRL_ARG_INJECT_PACKETS)
-    print("control {number=%d}{type=button}{role=logger}{display=Show Log}{tooltip=Show capture log}" % CTRL_ARG_LOGGER)
+    print("control {number=%d}{type=button}{role=logger}{display=Log}{tooltip=Show capture log}" % CTRL_ARG_LOGGER)
 
 
 class ConfigArg:
@@ -1286,6 +1286,20 @@ def tracee_capture(args: argparse.Namespace):
     # start packet injector thread
     packet_injector_th = threading.Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
     packet_injector_th.start()
+
+    # check if Tracee container image exists locally
+    command = 'docker images --format "{{.Repository}}:{{.Tag}}"'
+    out, err, returncode = send_command(local, command, ssh_client)
+    if returncode != 0:
+        error(f'docker images returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # pull container image if not present
+    if args.container_image not in out:
+        command = f'docker pull {args.container_image}'
+        log("Pulling Tracee docker image...")
+        _, err, returncode = send_command(local, command, ssh_client)
+        if returncode != 0:
+            error(f'docker pull returned with error code {returncode}, stderr dump:\n{err}')
 
     # run Tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
