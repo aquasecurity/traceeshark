@@ -13,7 +13,7 @@ import stat
 import struct
 import subprocess as subp
 import sys
-from threading import Lock, Thread
+import threading
 import time
 import traceback
 
@@ -38,6 +38,8 @@ DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
 REMOTE_CAPTURE_LOGFILE = '/tmp/tracee_logs.log'
+LOCAL_CAPTURE_INSTALL_PATH = os.path.join(TMP_DIR, 'tracee_tmp')
+REMOTE_CAPTURE_INSTALL_PATH = '/tmp/tracee_tmp'
 REMOTE_CAPTURE_OUTPUT_DIR = '/tmp/tracee_output'
 REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
@@ -429,7 +431,7 @@ class DataOutputManager:
     def __init__(self, extcap_pipe: str):
         # Initialize the pcapng file that is written to Wireshark's pipe.
         # Any access to the pipe and writer must be guarded by the lock.
-        self._lock = Lock()
+        self._lock = threading.Lock()
         self._extcap_pipe_f = open(extcap_pipe, 'wb')
         self._writer = self._init_pcapng()
     
@@ -615,15 +617,14 @@ def read_output(data_output_manager: DataOutputManager):
 def reader_thread(data_output_manager: DataOutputManager):
     try:
         read_output(data_output_manager)
-    except Exception:
-        stop_capture(is_error=True)
-        raise
+    except Exception as ex:
+        exception(ex)
 
 
 class SFTPManager:
     def __init__(self, sftp_client: paramiko.SFTPClient):
         self._sftp_client = sftp_client
-        self._lock = Lock()
+        self._lock = threading.Lock()
     
     def copy_dir_from_remote(self, remote_dir: str, local_dir: str) -> Iterator[str]:
         os.makedirs(local_dir, exist_ok=True)
@@ -706,7 +707,7 @@ class PacketInjector:
         self.data_output_manager = data_output_manager
         self.sftp = sftp
         self.output_dir = output_dir
-        self._lock = Lock()
+        self._lock = threading.Lock()
 
         # map of pcap file name (path) to a tuple containing the interface id and the last timestamp encountered
         self.file_state: Dict[str, Tuple[int, int]] = {}
@@ -819,7 +820,7 @@ class PacketInjector:
 class ControlOutputManager:
     def __init__(self, control_outf: BinaryIO):
         self._control_outf = control_outf
-        self._lock = Lock()
+        self._lock = threading.Lock()
 
         self._control_write(CTRL_ARG_LOGGER, CTRL_CMD_SET, b'')
         self.write_log_message("Capture started")
@@ -914,9 +915,8 @@ def toolbar_control(control_inf: BinaryIO, control_output_manager: ControlOutput
 def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputManager, output_dir: str, sftp: SFTPManager, packet_injector: PacketInjector):
     try:
         toolbar_control(control_inf, control_output_manager, output_dir, sftp, packet_injector)
-    except Exception:
-        stop_capture(is_error=True)
-        raise
+    except Exception as ex:
+        exception(ex)
 
 
 def periodic_packet_injector(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
@@ -949,9 +949,33 @@ def periodic_packet_injector(control_output_manager: ControlOutputManager, packe
 def packet_injector_thread(control_output_manager: ControlOutputManager, packet_injector: PacketInjector, interval: int):
     try:
         periodic_packet_injector(control_output_manager, packet_injector, interval)
-    except Exception:
-        stop_capture(is_error=True)
-        raise
+    except Exception as ex:
+        exception(ex)
+
+
+def sample_tracee_init(sftp: Optional[SFTPManager]):
+    global local
+
+    stat = os.stat if local else sftp.stat
+    tracee_pid_file = os.path.join(LOCAL_CAPTURE_INSTALL_PATH, 'tracee.pid') if local else f'{REMOTE_CAPTURE_INSTALL_PATH}/tracee.pid'
+
+    while True:
+        try:
+            stat(tracee_pid_file)
+        except FileNotFoundError:
+            pass
+        else:
+            log("Tracee is up and running")
+            return
+        
+        time.sleep(0.5)
+
+
+def tracee_init_sampler_thread(sftp: Optional[SFTPManager]):
+    try:
+        sample_tracee_init(sftp)
+    except Exception as ex:
+        exception(ex)
 
 
 def send_local_command(command: str) -> Tuple[str, str, int]:
@@ -994,7 +1018,27 @@ def error(msg: str) -> NoReturn:
     log(f'ERROR: {msg}')
     
     stop_capture(is_error=True)
-    raise RuntimeError()
+    
+    # raise a runtime error only on the main thread, so the program exits
+    if threading.current_thread() is threading.main_thread():
+        raise RuntimeError()
+    # on other threads, simply exit the thread
+    else:
+        sys.exit()
+
+
+def exception(ex: Exception) -> NoReturn:
+    sys.stderr.write(f'Exception: {str(ex)}\n')
+    log(f"Exception:\n{traceback.format_exc()}")
+
+    stop_capture(is_error=True)
+
+    # raise a runtime error only on the main thread, so the program exits
+    if threading.current_thread() is threading.main_thread():
+        raise RuntimeError()
+    # on other threads, simply exit the thread
+    else:
+        sys.exit()
 
 
 def exit_cb(_signum, _frame):
@@ -1018,9 +1062,10 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         command += f' --name {args.container_name}'
     
     logfile = args.logfile if local else REMOTE_CAPTURE_LOGFILE
+    install_path = LOCAL_CAPTURE_INSTALL_PATH if local else REMOTE_CAPTURE_INSTALL_PATH
     output_dir = args.output_dir if local else REMOTE_CAPTURE_OUTPUT_DIR
     new_entrypoint = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh') if local else REMOTE_CAPTURE_NEW_ENTRYPOINT
-    command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
+    command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {install_path}:/install_path:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
     if sshd_pid is not None:
@@ -1033,7 +1078,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
         if local and LINUX:
             command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
-    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log --capture dir:/output --capture clear-dir --capabilities add=cap_dac_override'
+    command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log --install-path /install_path --capture dir:/output --capture clear-dir --capabilities add=cap_dac_override'
 
     return command
 
@@ -1068,11 +1113,25 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
     sock.close()
 
 
+def connection_handler_thread(transport: paramiko.Transport, dst_addr: str, dst_port: int):
+    try:
+        handle_connection(transport, dst_addr, dst_port)
+    except Exception as ex:
+        exception(ex)
+
+
 def prepare_local_capture(args: argparse.Namespace):
     # create empty file to get logs from Tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
     open(args.logfile, 'w').close()
+
+    # create directory for Tracee temp files
+    if os.path.isdir(LOCAL_CAPTURE_INSTALL_PATH):
+        shutil.rmtree(LOCAL_CAPTURE_INSTALL_PATH)
+    elif os.path.isfile(LOCAL_CAPTURE_INSTALL_PATH):
+        os.remove(LOCAL_CAPTURE_INSTALL_PATH)
+    os.makedirs(LOCAL_CAPTURE_INSTALL_PATH)
 
     # create directory for Tracee output files
     if os.path.isdir(args.output_dir):
@@ -1097,12 +1156,11 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         os.remove(args.output_dir)
     
     # prepare ssh tunnel to receive output
-    log("Connecting to remote server...")
+    log("Setting up SSH tunnel...")
     ssh_data_client = ssh_connect(args)
 
     # on Windows, the previous capture doesn't terminate before the current one when restarting the capture,
     # so we have to wait a bit to give the previous capture a chance to clean up its forwarded ports
-    log("Setting up SSH tunnel...")
     for i in range(10):
         try:
             ssh_data_client.get_transport().request_port_forward('127.0.0.1', DATA_PORT)
@@ -1123,8 +1181,8 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         else:
             break
     
-    ssh_data_forwarder = Thread(
-        target=handle_connection,
+    ssh_data_forwarder = threading.Thread(
+        target=connection_handler_thread,
         args=(ssh_data_client.get_transport(), '127.0.0.1', DATA_PORT),
         daemon=True
     )
@@ -1135,6 +1193,11 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_LOGFILE} && touch {REMOTE_CAPTURE_LOGFILE}')
     if returncode != 0:
         error(f'error creating file for Tracee logs, stderr dump:\n{err}')
+    
+    # create directory for Tracee temp files
+    _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_INSTALL_PATH} && mkdir {REMOTE_CAPTURE_INSTALL_PATH}')
+    if returncode != 0:
+        error(f'error creating temp directory for Tracee, stderr dump:\n{err}')
     
     # create directory for Tracee output files
     _, err, returncode = send_ssh_command(ssh_client, f'rm -rf {REMOTE_CAPTURE_OUTPUT_DIR} && mkdir {REMOTE_CAPTURE_OUTPUT_DIR} && chmod g+ws {REMOTE_CAPTURE_OUTPUT_DIR}')
@@ -1198,6 +1261,7 @@ def tracee_capture(args: argparse.Namespace):
         sshd_pid = None
         prepare_local_capture(args)
     else:
+        log("Connecting to remote server...")
         ssh_client = ssh_connect(args)
         sftp = SFTPManager(ssh_client.open_sftp())
         sshd_pid = prepare_remote_capture(args, ssh_client, sftp)
@@ -1212,15 +1276,15 @@ def tracee_capture(args: argparse.Namespace):
     packet_injector = PacketInjector(data_output_manager, sftp, args.output_dir)
     
     # start toolbar control thread
-    control_th = Thread(target=toolbar_control, args=(control_inf, control_output_manager, args.output_dir, sftp, packet_injector), daemon=True)
+    control_th = threading.Thread(target=toolbar_thread, args=(control_inf, control_output_manager, args.output_dir, sftp, packet_injector), daemon=True)
     control_th.start()
 
     # start reader thread
-    reader_th = Thread(target=reader_thread, args=(data_output_manager,))
+    reader_th = threading.Thread(target=reader_thread, args=(data_output_manager,))
     reader_th.start()
 
     # start packet injector thread
-    packet_injector_th = Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
+    packet_injector_th = threading.Thread(target=packet_injector_thread, args=(control_output_manager, packet_injector, args.packet_injection_interval), daemon=True)
     packet_injector_th.start()
 
     # run Tracee container
@@ -1230,6 +1294,10 @@ def tracee_capture(args: argparse.Namespace):
     if returncode != 0:
         error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
     container_id = out.rstrip('\n')
+
+    # monitor for tracee.pid file to know when Tracee is running
+    tracee_init_sampler_th = threading.Thread(target=tracee_init_sampler_thread, args=(sftp,), daemon=True)
+    tracee_init_sampler_th.start()
 
     # wait until Tracee exits (triggered by stop_capture or by an error)
     command = f'docker wait {container_id}'
@@ -1373,8 +1441,6 @@ if __name__ == '__main__':
         pass
     # any other exception needs to be printed
     except Exception as ex:
-        sys.stderr.write(f'Exception: {str(ex)}\n')
-        log(f"Exception:\n{traceback.format_exc()}")
-        stop_capture(is_error=True)
+        exception(ex)
     finally:
         sys.stderr.flush()
