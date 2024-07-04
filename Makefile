@@ -6,6 +6,15 @@ OS_NAME := $(shell uname -s)
 # update wireshark source tree and build
 all: copy-source build
 
+clean:
+	@rm -rf wireshark/build
+	@rm -f wireshark/CMakeListsCustom.txt
+	@rm -rf wireshark/plugins/epan/tracee-event
+	@rm -rf wireshark/plugins/epan/tracee-network-capture
+	@rm -f wireshark/plugins/epan/common.h
+	@rm -f wireshark/plugins/epan/wsjson_extensions.c
+	@rm -rf wireshark/plugins/wiretap/tracee-json
+
 # copy only source files to wireshark source tree
 copy-source:
 	@if [ -d "wireshark/plugins/epan/tracee-event" ]; then \
@@ -31,11 +40,6 @@ copy-source:
 
 # copy all project files to wireshark source tree
 copy-all:
-	@rm -r wireshark/plugins/epan/tracee-event
-	@rm -r wireshark/plugins/epan/tracee-network-capture
-	@rm wireshark/plugins/epan/common.h
-	@rm wireshark/plugins/epan/wsjson_extensions.c
-	@rm -r wireshark/plugins/wiretap/tracee-json
 	@cp -r plugins wireshark/
 	@cp CMakeListsCustom.txt wireshark/
 
@@ -115,7 +119,7 @@ debug: all install
 	@wireshark/build/run/wireshark --log-level DEBUG
 
 # prepare build directory (needed before building for the first time)
-cmake: copy-all
+cmake: clean copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
 ifneq ($(USE_QT5),y)
 	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -S wireshark -B wireshark/build
