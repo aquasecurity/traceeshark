@@ -6,6 +6,7 @@ copy /Y plugins\epan\tracee-event\packet-tracee.c wireshark\plugins\epan\tracee-
 copy /Y plugins\epan\tracee-event\enrichments.c wireshark\plugins\epan\tracee-event
 copy /Y plugins\epan\tracee-event\wanted_fields.c wireshark\plugins\epan\tracee-event
 copy /Y plugins\epan\tracee-event\stats.c wireshark\plugins\epan\tracee-event
+copy /Y plugins\epan\tracee-event\process_tree.c wireshark\plugins\epan\tracee-event
 copy /Y plugins\epan\tracee-event\tracee.h wireshark\plugins\epan\tracee-event
 copy /Y plugins\epan\tracee-event\plugin.c wireshark\plugins\epan\tracee-event
 
