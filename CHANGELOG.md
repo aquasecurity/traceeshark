@@ -1,14 +1,86 @@
 # Changelog
 
+## v0.3.0
+
+**Added**:
+
+- Column format preferences
+  
+  - Decide whether to display host PID, namespace PID or both
+  
+  - Decide whether to display container ID or name
+  
+  - Decide whether to append container image
+
+- Source and destination IP columns in Tracee profile
+
+- Signature arguments in info column
+
+- Event enrichments
+  
+  - `security_socket_connect`
+  
+  - `security_sockert_bind`
+  
+  - `dynamic_code_loading`
+  
+  - `fileless_execution`
+  
+  - `stdio_over_socket`
+  
+  - `magic_write` - add decoded magic and some recognized file types
+  
+  - `security_file_open`
+
+- Live capture
+  
+  - Default capture preset
+  - Logs and errors can be accessed from toolbar
+
+- Statistics
+  
+  - Event counts
+  - Process tree
+- Dissection of the new `net_packet_raw` event, which hands off the packet dissection to Wireshark
+- Traceeshark logo
+
+**Changed**:
+
+- Reorganized dissection tree structure
+
+- Revised "Important" filter button
+
+- Revised "Network" filter button
+
+- Event argument filters are now namespaced according to event name
+
+- Live capture
+  
+  - Tracee options and presets are not mututally exclusive anymore
+  
+  - Simplified preset system
+  
+  - Pin default Tracee docker image to current stable release
+
+- README.md updates
+
+**Fixed**:
+
+- Live capture bugfixes
+
+- Tracee event dissector bugfixes
+
+- Makefile, build script and install script fixes
+
 ## v0.2.3
 
-Added:
+**Added**:
 
 - Autoinstall script
 
 - Release for Wireshark version 4.2.2 on Linux (Ubuntu 24.04 Wireshark package version)
 
-Fixed:
+**Fixed**:
 
 - Macos build and installation fixes
 
@@ -18,7 +90,7 @@ Fixed:
 
 ## v0.2.2
 
-Added:
+**Added**:
 
 - Live capture
   
@@ -34,18 +106,18 @@ Added:
 
 - Added GitHub workflow for automatic builds across all platforms
 
-Fixed:
+**Fixed**:
 
 - Live capture bugfixes
 
 ## v0.2.1
 
-Changed:
+**Changed**:
 
 - Exclude SSH tunnel PID in remote capture
 - Traceeshark version is specified once for building in the `.env` file
 
-Fixed:
+**Fixed**:
 
 - extcap bugfixes
 
@@ -53,19 +125,19 @@ Fixed:
 
 ## v0.2.0
 
-Added:
+**Added**:
 
 - Remote live capturing
 
 - Local live capturing on Windows and Mac using docker desktop's VM
 
-Fixed:
+**Fixed**:
 
 - Makefile and install script bug on Mac
 
 ## v0.1.2
 
-Added:
+**Added**:
 
 - Ability to specify logfile for live capture
 
@@ -83,11 +155,11 @@ Added:
   
   - []trace.DnsResponseData
 
-Changed:
+**Changed**:
 
 - Refactored handling of complex argument types
 
-Fixed:
+**Fixed**:
 
 - More robust identification of signatures instead of relying on "sig_" prefix
 
@@ -97,17 +169,17 @@ Fixed:
 
 ## v0.1.1
 
-Added:
+**Added**:
 
 - Build and distribution for Windows
 
 - Build instructions in README.md
 
-Changed:
+**Changed**:
 
 - Tracee network capture dissector is now a postdissector instead of overriding the NULL/Loopback dissector
 
-Fixed:
+**Fixed**:
 
 - Distribution and Wireshark compatibility fixes
 
@@ -115,7 +187,7 @@ Fixed:
 
 Initial release.
 
-Features:
+**Features**:
 
 - Ability to load Tracee JSON output files into Wireshark
 
