@@ -121,10 +121,10 @@ debug: all install
 # prepare build directory (needed before building for the first time)
 cmake: clean copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
-ifneq ($(USE_QT5),y)
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -S wireshark -B wireshark/build
+ifeq ($(WERROR),y)
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -S wireshark -B wireshark/build
 else
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DUSE_qt6=OFF -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF -S wireshark -B wireshark/build
 endif
 
 dist: all

@@ -43,6 +43,7 @@ set_target_properties(tracee-json PROPERTIES
 	PREFIX ""
 	SUFFIX "${Wireshark_PLUGIN_SUFFIX_EPAN}"
 	DEFINE_SYMBOL ""
+    COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
 target_link_libraries(tracee-json wiretap)
 

@@ -95,7 +95,7 @@ jobs:
     - name: Build Traceeshark (Unix)
       if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-14' || matrix.os == 'macos-13'
       run: |
-        make cmake
+        WERROR=y make cmake
         make
     
     - name: Build Traceeshark (Windows)
@@ -103,6 +103,7 @@ jobs:
       run: |
         set WIRESHARK_BASE_DIR=%CD%
         set WIRESHARK_QT6_PREFIX_PATH=$QT_ROOT_DIR
+        set WERROR=y
         call scripts\make_cmake.bat
         call scripts\make.bat
       shell: cmd
