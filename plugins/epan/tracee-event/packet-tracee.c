@@ -227,9 +227,9 @@ static gint ett_hooked_symbols_map = -1;
 static gint ett_dns_query_data = -1;
 
 // preferences
-static gint pid_format = PID_FORMAT_CONTAINER_ONLY;
-static gint container_identifier = CONTAINER_IDENTIFIER_ID;
-static gboolean show_container_image = FALSE;
+static gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
+static gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
+static gboolean preferences_show_container_image = FALSE;
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields
@@ -281,7 +281,8 @@ static bool dynamic_hf_map_destroy_cb(wmem_allocator_t *allocator _U_, wmem_cb_e
     return TRUE;
 }
 
-static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    gchar *json_data, jsmntok_t *root_tok, struct tracee_dissector_data *data)
 {
     proto_item *process_item, *tmp_item;
     proto_tree *process_tree;
@@ -298,6 +299,7 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     // add process name
     DISSECTOR_ASSERT((process_name = json_get_string(json_data, root_tok, "processName")) != NULL);
     proto_tree_add_string(process_tree, hf_process_name, tvb, 0, 0, process_name);
+    data->process->name = process_name;
 
     // add executable path
     DISSECTOR_ASSERT((tmp_tok = json_get_object(json_data, root_tok, "executable")) != NULL);
@@ -309,6 +311,7 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processId", &tmp_int));
     pid = (gint32)tmp_int;
     proto_tree_add_int(process_tree, hf_process_id, tvb, 0, 0, pid);
+    data->process->pid = pid;
 
     // add thread ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadId", &tmp_int));
@@ -318,12 +321,14 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentProcessId", &tmp_int));
     ppid = (gint32)tmp_int;
     proto_tree_add_int(process_tree, hf_parent_process_id, tvb, 0, 0, ppid);
+    data->process->ppid = ppid;
 
     // add host process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostProcessId", &tmp_int));
     host_pid = (gint32)tmp_int;
     proto_tree_add_int(process_tree, hf_host_process_id, tvb, 0, 0, host_pid);
     proto_item_append_text(process_item, ": %d (%s)", host_pid, process_name);
+    data->process->host_pid = host_pid;
 
     // add host thread ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostThreadId", &tmp_int));
@@ -333,10 +338,11 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "hostParentProcessId", &tmp_int));
     host_ppid = (gint32)tmp_int;
     proto_tree_add_int(process_tree, hf_host_parent_process_id, tvb, 0, 0, host_ppid);
+    data->process->host_ppid = host_ppid;
 
     // add PID column
     if (pid != 0) {
-        switch (pid_format) {
+        switch (preferences_pid_format) {
             case PID_FORMAT_CONTAINER_ONLY:
                 pid_col_str = wmem_strdup_printf(pinfo->pool, "%d", pid);
                 break;
@@ -355,7 +361,7 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
 
     // add PPID column
     if (ppid != 0) {
-        switch (pid_format) {
+        switch (preferences_pid_format) {
             case PID_FORMAT_CONTAINER_ONLY:
                 ppid_col_str = wmem_strdup_printf(pinfo->pool, "%d", ppid);
                 break;
@@ -447,7 +453,7 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
 
     // add container column and add info to container item
     if (id != NULL) {
-        if (container_identifier == CONTAINER_IDENTIFIER_ID)
+        if (preferences_container_identifier == CONTAINER_IDENTIFIER_ID)
             container_col_str = wmem_strndup(pinfo->pool, id, 12);
         else
             container_col_str = wmem_strdup(pinfo->pool, name);
@@ -455,7 +461,7 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
         proto_item_append_text(container_item, ": %s", container_col_str);
 
         if (image != NULL) {
-            if (show_container_image)
+            if (preferences_show_container_image)
                 container_col_str = wmem_strdup_printf(pinfo->pool, "%s (%s)", container_col_str, image);
             proto_item_append_text(container_item, " (%s)", image);
         }
@@ -501,7 +507,8 @@ static void dissect_k8s_fields(tvbuff_t *tvb, proto_tree *tree, gchar *json_data
         proto_item_append_text(k8s_item, ": none");
 }
 
-static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    gchar *json_data, jsmntok_t *root_tok, struct tracee_dissector_data *data)
 {
     proto_item *context_item;
     proto_tree *context_tree;
@@ -521,7 +528,7 @@ static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     proto_tree_add_string(context_tree, hf_hostname, tvb, 0, 0, tmp_str);
 
     // add process context
-    dissect_process_fields(tvb, pinfo, context_tree, json_data, root_tok);
+    dissect_process_fields(tvb, pinfo, context_tree, json_data, root_tok, data);
 
     // add container fields
     dissect_container_fields(tvb, pinfo, context_tree, json_data, root_tok);
@@ -2114,7 +2121,7 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     proto_tree_add_time(tree, hf_timestamp, tvb, 0, 0, &timestamp);
 
     // add event context
-    dissect_event_context(tvb, pinfo, tree, json_data, root_tok);
+    dissect_event_context(tvb, pinfo, tree, json_data, root_tok, data);
 
     // add event ID
     if (!json_get_int(json_data, root_tok, "eventId", &event_id)) {
@@ -2188,7 +2195,12 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
 
     // dissect event fields
     dissector_data = wmem_new0(pinfo->pool, struct tracee_dissector_data);
+    dissector_data->process = wmem_new0(pinfo->pool, struct process_info);
     dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
+
+    // update process tree if it's the first time seeing this event
+    if (!pinfo->fd->visited)
+        process_tree_update(dissector_data->process);
 
     // this event contains a packet, dissect it
     if (dissector_data->packet_tvb != NULL)
@@ -3144,14 +3156,14 @@ void proto_register_tracee(void)
 
     prefs_register_enum_preference(tracee_module, "pid_format", "PID column format",
         "Whether to show only PID in container, only PID on host, or both",
-        &pid_format, pid_format_vals, FALSE);
+        &preferences_pid_format, pid_format_vals, FALSE);
 
     prefs_register_enum_preference(tracee_module, "container_identifier", "Container identifier in column",
         "Whether to show container ID or name in the container column",
-        &container_identifier, container_identifier_vals, FALSE);
+        &preferences_container_identifier, container_identifier_vals, FALSE);
     
     prefs_register_bool_preference(tracee_module, "container_image", "Show container image",
-        "Whether to show the container image in the container column", &show_container_image);
+        "Whether to show the container image in the container column", &preferences_show_container_image);
     
     tracee_tap = register_tap("tracee");
 
@@ -3166,6 +3178,9 @@ void proto_register_tracee(void)
     // register event name dissector table
     event_name_dissector_table = register_dissector_table("tracee.eventName",
         "Tracee event name", proto_tracee, FT_STRINGZ, FALSE);
+    
+    // initialize process tree
+    process_tree_init();
     
     // initialize event enrichment
     register_tracee_enrichments(proto_tracee);

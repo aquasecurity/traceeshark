@@ -4,12 +4,21 @@ extern const value_string ipproto_val[];
 extern value_string_ext dns_types_vals_ext;
 extern const value_string dns_classes[];
 
+struct process_info {
+    gint32 pid;
+    gint32 host_pid;
+    gint32 ppid;
+    gint32 host_ppid;
+    const char *name;
+};
+
 struct tracee_dissector_data {
     proto_tree *args_tree;
     const gchar *event_name;
     gboolean is_signature;
     gint32 signature_severity;
     tvbuff_t *packet_tvb;
+    struct process_info *process;
 };
 
 enum field_type {
@@ -45,6 +54,12 @@ proto_item *proto_tree_add_int64_wanted(proto_tree *tree, int hfindex, tvbuff_t 
 proto_item *proto_tree_add_uint64_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint64 value);
 proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, const char* value);
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
+
+void process_tree_init(void);
+void process_tree_update(struct process_info *process);
+GArray *process_tree_get_root_pids(void);
+struct process_info *process_tree_get_process(gint32 pid);
+GArray *process_tree_get_children_pids(gint32 pid);
 
 void register_tracee_enrichments(int proto);
 void register_tracee_statistics(void);
