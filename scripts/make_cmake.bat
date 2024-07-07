@@ -12,7 +12,11 @@ copy /Y CMakeListsCustom.txt wireshark
 rmdir /S /Q build
 mkdir build
 pushd build
-cmake -G "Visual Studio 17 2022" -A x64 -DTRACEESHARK_VERSION=%TRACEESHARK_VERSION% ..\wireshark
+if "%WERROR%"=="y" (
+    cmake -G "Visual Studio 17 2022" -A x64 -DTRACEESHARK_VERSION=%TRACEESHARK_VERSION% -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON ..\wireshark
+) else (
+    cmake -G "Visual Studio 17 2022" -A x64 -DTRACEESHARK_VERSION=%TRACEESHARK_VERSION% -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF ..\wireshark
+)
 popd
 
 endlocal
