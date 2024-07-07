@@ -193,7 +193,11 @@ static int enrich_stdio_over_socket(tvbuff_t *tvb _U_, packet_info *pinfo, proto
 static const char *stringify_decoded_data(packet_info *pinfo, guchar *decoded_data, gsize len)
 {
     gsize i;
+#if ((WIRESHARK_VERSION_MAJOR < 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR < 1)))
+    wmem_strbuf_t *str = wmem_strbuf_sized_new(pinfo->pool, len, 0);
+#else
     wmem_strbuf_t *str = wmem_strbuf_new_sized(pinfo->pool, len);
+#endif
 
     for (i = 0; i < len; i++) {
         if (isprint(decoded_data[i]))

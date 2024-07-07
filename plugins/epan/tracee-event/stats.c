@@ -29,8 +29,13 @@ static void tracee_stats_tree_init(stats_tree *st)
     other_severity_node = stats_tree_create_node(st, other_severity_node_name, signatures_node, STAT_DT_INT, TRUE);
 }
 
+#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
+static tap_packet_status tracee_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p)
+#else
 static tap_packet_status tracee_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
     epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
+#endif
 {
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
     int node;

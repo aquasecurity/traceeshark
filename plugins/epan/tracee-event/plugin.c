@@ -2,6 +2,7 @@
 
 #include <wsutil/plugins.h>
 #include <epan/proto.h>
+#include <ws_version.h>
 
 extern void proto_register_tracee(void);
 extern void proto_reg_handoff_tracee(void);
