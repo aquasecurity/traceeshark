@@ -4,6 +4,8 @@ extern const value_string ipproto_val[];
 extern value_string_ext dns_types_vals_ext;
 extern const value_string dns_classes[];
 
+extern gint preferences_pid_format;
+
 struct process_info {
     gint32 pid;
     gint32 host_pid;

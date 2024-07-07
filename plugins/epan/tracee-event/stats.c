@@ -1,4 +1,5 @@
 #include "tracee.h"
+#include "../common.h"
 
 #include <epan/stats_tree.h>
 
@@ -93,6 +94,36 @@ static void free_pid_stat_node(gpointer data)
     g_free(node);
 }
 
+static gchar *process_tree_get_node_name(gint32 pid, struct process_info *process)
+{
+    gchar *node_name, *tmp_str;
+
+    if (process == NULL)
+        return g_strdup_printf("%d", pid);
+    
+    switch (preferences_pid_format) {
+        case PID_FORMAT_CONTAINER_ONLY:
+            node_name = g_strdup_printf("%d", process->pid);
+            break;
+        case PID_FORMAT_HOST_ONLY:
+            node_name = g_strdup_printf("%d", process->host_pid);
+            break;
+        default:
+            node_name = g_strdup_printf("%d", process->pid);
+            if (process->pid != process->host_pid) {
+                tmp_str = node_name;
+                node_name = g_strdup_printf("%s [%d]", node_name, process->host_pid);
+                g_free(tmp_str);
+            }
+            break;
+    }
+    
+    tmp_str = node_name;
+    node_name = g_strdup_printf("%s (%s)", node_name, process->name);
+    g_free(tmp_str);
+    return node_name;
+}
+
 static void process_tree_stats_tree_add_process(stats_tree *st, gint32 pid, int parent_node_id)
 {
     guint i;
@@ -103,11 +134,7 @@ static void process_tree_stats_tree_add_process(stats_tree *st, gint32 pid, int 
     GArray *children_pids = process_tree_get_children_pids(pid);
 
     node->parent_id = parent_node_id;
-    
-    if (process != NULL)
-        node->name = g_strdup_printf("%d (%s)", pid, process->name);
-    else
-        node->name = g_strdup_printf("%d", pid);
+    node->name = process_tree_get_node_name(pid, process);
     
     node_id = stats_tree_create_node(st, node->name, parent_node_id, STAT_DT_INT, (children_pids->len > 0));
 
