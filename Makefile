@@ -122,10 +122,11 @@ debug: all install
 # prepare build directory (needed before building for the first time)
 cmake: clean copy-all
 	@rm -rf wireshark/build && mkdir wireshark/build
+# Wireshark changed DISABLE_WERROR to ENABLE_WERROR at some point. Use both for compatibility (even though it causes a cmake warning to be thrown)
 ifeq ($(WERROR),y)
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -DDISABLE_WERROR=OFF -S wireshark -B wireshark/build
 else
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF -DDISABLE_WERROR=ON -S wireshark -B wireshark/build
 endif
 
 dist: all
