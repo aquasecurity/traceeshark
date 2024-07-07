@@ -227,7 +227,7 @@ static gint ett_hooked_symbols_map = -1;
 static gint ett_dns_query_data = -1;
 
 // preferences
-static gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
+gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
 static gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
 static gboolean preferences_show_container_image = FALSE;
 
