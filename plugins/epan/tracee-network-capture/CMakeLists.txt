@@ -41,7 +41,6 @@ add_compile_definitions(
 add_library(tracee-network-capture MODULE packet-tracee-network-capture.c ../wsjson_extensions.c)
 set_target_properties(tracee-network-capture PROPERTIES
 	PREFIX ""
-	SUFFIX "${Wireshark_PLUGIN_SUFFIX_EPAN}"
 	DEFINE_SYMBOL ""
     COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )

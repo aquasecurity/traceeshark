@@ -204,7 +204,11 @@ cleanup:
     return res;
 }
 
+#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
+static bool
+#else
 static gboolean
+#endif
 tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info, gint64 *data_offset)
 {
     *data_offset = file_tell(wth->fh);
@@ -212,7 +216,11 @@ tracee_json_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar **err_in
     return tracee_json_read_event(wth->fh, rec, buf, err, err_info, *data_offset, wth->priv);
 }
 
+#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
+static bool
+#else
 static gboolean
+#endif
 tracee_json_seek_read(wtap *wth, gint64 seek_off, wtap_rec *rec, Buffer *buf, int *err, gchar **err_info)
 {
     if (file_seek(wth->random_fh, seek_off, SEEK_SET, err) == -1)
