@@ -91,15 +91,9 @@ install:
 	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan
 	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap
 
-	@if [ "$(OS_NAME)" = "Darwin" ]; then \
-		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-event.so; \
-		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-network-capture.so; \
-		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap/tracee-json.so; \
-	else \
-		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan; \
-		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan; \
-		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap; \
-	fi
+	@cp wireshark/build/run/tracee-event* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-event.so
+	@cp wireshark/build/run/tracee-network-capture* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-network-capture.so
+	@cp wireshark/build/run/tracee-json* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap/tracee-json.so
 
 # build and run
 run: all install
@@ -124,23 +118,9 @@ dist: all
 	@mkdir dist/workdir
 	@cp dist/install.sh dist/workdir
 
-	@if [ -e "wireshark/build/run/tracee-event" ]; then \
-		cp wireshark/build/run/tracee-event dist/workdir/tracee-event.so; \
-	else \
-		cp wireshark/build/run/tracee-event.so* dist/workdir; \
-	fi
-
-	@if [ -e "wireshark/build/run/tracee-network-capture" ]; then \
-		cp wireshark/build/run/tracee-network-capture dist/workdir/tracee-network-capture.so; \
-	else \
-		cp wireshark/build/run/tracee-network-capture.so* dist/workdir; \
-	fi
-	
-	@if [ -e "wireshark/build/run/tracee-json" ]; then \
-		cp wireshark/build/run/tracee-json dist/workdir/tracee-json.so; \
-	else \
-		cp wireshark/build/run/tracee-json.so* dist/workdir; \
-	fi
+	@cp wireshark/build/run/tracee-event* dist/workdir/tracee-event.so
+	@cp wireshark/build/run/tracee-network-capture* dist/workdir/tracee-network-capture.so
+	@cp wireshark/build/run/tracee-json* dist/workdir/tracee-json.so
 
 	@if [ "$(OS_NAME)" = "Darwin" ]; then \
 		scripts/macos_rpathify.sh dist/workdir/tracee-json.so; \

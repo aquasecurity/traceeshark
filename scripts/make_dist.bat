@@ -6,9 +6,9 @@ rmdir /S /Q dist\workdir
 mkdir dist\workdir
 
 copy /Y dist\install.ps1 dist\workdir\install.ps1
-copy /Y build\run\RelWithDebInfo\tracee-event dist\workdir\tracee-event.dll
-copy /Y build\run\RelWithDebInfo\tracee-network-capture dist\workdir\tracee-network-capture.dll
-copy /Y build\run\RelWithDebInfo\tracee-json dist\workdir\tracee-json.dll
+copy /Y build\run\RelWithDebInfo\tracee-event.dll dist\workdir\tracee-event.dll
+copy /Y build\run\RelWithDebInfo\tracee-network-capture.dll dist\workdir\tracee-network-capture.dll
+copy /Y build\run\RelWithDebInfo\tracee-json.dll dist\workdir\tracee-json.dll
 xcopy /Y /E /I profiles dist\workdir\profiles
 xcopy /Y /E /I extcap dist\workdir\extcap
 del /Q dist\workdir\extcap\tracee-capture.sh
