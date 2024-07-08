@@ -229,7 +229,11 @@ static gint ett_dns_query_data = -1;
 // preferences
 gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
 static gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
+#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
+static bool preferences_show_container_image = FALSE;
+#else
 static gboolean preferences_show_container_image = FALSE;
+#endif
 
 struct event_dynamic_hf {
     GPtrArray *hf_ptrs;         // GPtrArray containing pointers to the registered fields

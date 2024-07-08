@@ -41,7 +41,6 @@ add_compile_definitions(
 add_library(tracee-event MODULE plugin.c packet-tracee.c enrichments.c wanted_fields.c stats.c process_tree.c internal_defs.c ../wsjson_extensions.c)
 set_target_properties(tracee-event PROPERTIES
 	PREFIX ""
-	SUFFIX "${Wireshark_PLUGIN_SUFFIX_EPAN}"
 	DEFINE_SYMBOL ""
     COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
