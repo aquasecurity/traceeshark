@@ -1,0 +1,86 @@
+name: Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # macos-14 is ARM64, macos-13 is x86-64
+        os: [ubuntu-latest, macos-14, macos-13, windows-latest]
+        wireshark_version: [wireshark-4.2.5]
+        include:
+          # Ubuntu 22.04 Wireshark package version
+          - os: ubuntu-latest
+            wireshark_version: wireshark-3.6.2
+          # Ubuntu 24.04 Wireshark package version
+          - os: ubuntu-latest
+            wireshark_version: wireshark-4.2.2
+    
+    steps:
+    - name: Disable auto CRLF (Windows)
+      if: matrix.os == 'windows-latest'
+      run: git config --global core.autocrlf false
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.tag }}
+    
+    - name: Clone Wireshark
+      run: git clone --depth 1 --branch ${{ matrix.wireshark_version }} https://github.com/wireshark/wireshark
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt update
+        sudo apt install -y ninja-build
+        sudo wireshark/tools/debian-setup.sh
+    
+    - name: Install dependencies (Macos)
+      if: matrix.os == 'macos-14' || matrix.os == 'macos-13'
+      run: wireshark/tools/macos-setup-brew.sh
+    
+    - name: Install dependencies (Windows)
+      if: matrix.os == 'windows-latest'
+      run: choco install -y winflexbison3
+    
+    - name: Install Qt (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: 6.5
+        modules: qt5compat
+    
+    - name: Add msbuild to PATH (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Install Wireshark headers (Unix)
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-14' || matrix.os == 'macos-13'
+      uses: ./.github/actions/install-wireshark-headers-unix
+    
+    - name: Install Wireshark headers (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: ./.github/actions/install-wireshark-headers-windows
+    
+    - name: Build Traceeshark (Unix)
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-14' || matrix.os == 'macos-13'
+      run: |
+        WERROR=y make cmake
+        make
+    
+    - name: Build Traceeshark (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        set WIRESHARK_BASE_DIR=%CD%
+        set WIRESHARK_QT6_PREFIX_PATH=$QT_ROOT_DIR
+        set WERROR=y
+        call scripts\make_cmake.bat
+        call scripts\make.bat
+      shell: cmd
