@@ -69,7 +69,11 @@ void process_tree_update(struct process_info *process)
     }
 }
 
+#if ((WIRESHARK_VERSION_MAJOR < 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR < 1)))
+static gboolean get_root_pids_cb(const void *key, void *value, void *userdata)
+#else
 static bool get_root_pids_cb(const void *key, void *value, void *userdata)
+#endif
 {
     guint key_val;
     struct process_node *node = (struct process_node *)value;
