@@ -202,7 +202,7 @@ void register_tracee_statistics(void)
 #else // old stats tree API
     stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
         0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Process Tree",
+    stats_tree_register_plugin("tracee", "tracee_processes", "Tracee/Process Tree",
         0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
 #endif
 }
