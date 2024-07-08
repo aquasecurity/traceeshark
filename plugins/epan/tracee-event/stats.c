@@ -79,16 +79,22 @@ static tap_packet_status event_counts_stats_tree_packet(stats_tree* st, packet_i
     return TAP_PACKET_REDRAW;
 }
 
-struct pid_stat_node {
+struct process_stat_node {
     int parent_id;
     gchar *name;
 };
 
-GHashTable *pid_stat_nodes;
+// Hash table mapping from stats tree address to another hash table of the nodes of the process tree indexed by PID.
+// The cleanup function must be able to free all of the saved data, and it doesn't receive any private context,
+// so the data must be global.
+// Because multiple stats windows can be opened at once, we cannot use a global hash table of nodes,
+// so we use an ugly hack that saves the data of each window as an entry in a global hash table indexed
+// by the stats tree data structure address, which is unique for each window.
+GHashTable *stats_tree_context;
 
-static void free_pid_stat_node(gpointer data)
+static void free_process_stat_node(gpointer data)
 {
-    struct pid_stat_node *node = (struct pid_stat_node *)data;
+    struct process_stat_node *node = (struct process_stat_node *)data;
 
     g_free(node->name);
     g_free(node);
@@ -129,9 +135,15 @@ static void process_tree_stats_tree_add_process(stats_tree *st, gint32 pid, int 
     guint i;
     int node_id;
     int *nodes_key;
-    struct pid_stat_node *node = g_new0(struct pid_stat_node, 1);
-    struct process_info *process = process_tree_get_process(pid);
-    GArray *children_pids = process_tree_get_children_pids(pid);
+    GHashTable *process_stat_nodes;
+    struct process_stat_node *node;
+    struct process_info *process;
+    GArray *children_pids;
+
+    DISSECTOR_ASSERT((process_stat_nodes = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+    node = g_new0(struct process_stat_node, 1);
+    process = process_tree_get_process(pid);
+    children_pids = process_tree_get_children_pids(pid);
 
     node->parent_id = parent_node_id;
     node->name = process_tree_get_node_name(pid, process);
@@ -140,7 +152,7 @@ static void process_tree_stats_tree_add_process(stats_tree *st, gint32 pid, int 
 
     nodes_key = g_new(int, 1);
     *nodes_key = pid;
-    g_hash_table_insert(pid_stat_nodes, nodes_key, node);
+    g_hash_table_insert(process_stat_nodes, nodes_key, node);
 
     // iterate through all children, adding each one to the stats tree by calling this function recursively
     for (i = 0; i < children_pids->len; i++)
@@ -153,8 +165,11 @@ static void process_tree_stats_tree_init(stats_tree *st)
 {
     guint i;
     GArray *root_pids = process_tree_get_root_pids();
+    GHashTable *process_stat_nodes = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, free_process_stat_node);
+    gint64 *key = g_new(gint64, 1);
+    *key = (gint64)st;
 
-    pid_stat_nodes = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, free_pid_stat_node);
+    g_hash_table_insert(stats_tree_context, key, process_stat_nodes);
 
     for (i = 0; i < root_pids->len; i++)
         process_tree_stats_tree_add_process(st, g_array_index(root_pids, gint32, i), 0);
@@ -170,25 +185,34 @@ static tap_packet_status process_tree_stats_tree_packet(stats_tree* st, packet_i
     epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
 #endif
 {
-    struct pid_stat_node *node;
+    struct process_stat_node *node;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    GHashTable *process_stat_nodes;
+
+    DISSECTOR_ASSERT((process_stat_nodes = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
     if (data->process == NULL || data->process->host_pid == 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    DISSECTOR_ASSERT((node = g_hash_table_lookup(pid_stat_nodes, &data->process->host_pid)) != NULL);
+    DISSECTOR_ASSERT((node = g_hash_table_lookup(process_stat_nodes, &data->process->host_pid)) != NULL);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
 
     return TAP_PACKET_REDRAW;
 }
 
-static void process_tree_stats_tree_cleanup(stats_tree *st _U_)
+static void process_tree_stats_tree_cleanup(stats_tree *st)
 {
-    g_hash_table_destroy(pid_stat_nodes);
+    GHashTable *process_stat_nodes;
+
+    DISSECTOR_ASSERT((process_stat_nodes = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+    g_hash_table_destroy(process_stat_nodes);
+    g_hash_table_remove(stats_tree_context, &st);
 }
 
 void register_tracee_statistics(void)
 {
+    stats_tree_context = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
+
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3))) // new stats tree API
     stats_tree_cfg *event_counts_st, *process_tree_st;
 
