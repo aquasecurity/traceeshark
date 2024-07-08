@@ -17,6 +17,6 @@ runs:
       id: install_wireshark
       if: ${{ steps.install_headers.outcome == 'failure' }}
       run: |
-        ninja -C wireshark/build -j$(nproc)
+        ninja -C wireshark/build
         sudo ninja -C wireshark/build install
       shell: bash
