@@ -12,6 +12,7 @@ struct process_info {
     gint32 ppid;
     gint32 host_ppid;
     const char *name;
+    const char *exec_path;
     const char *command_line;
 };
 
