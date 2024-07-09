@@ -6,12 +6,14 @@
 static int hf_decoded_data = -1;
 static int hf_file_type = -1;
 
-static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
+static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data)
 {
     const gchar *pathname, *cmdline;
+    struct tracee_dissector_data *dissector_data = (struct tracee_dissector_data *)data;
 
     pathname = wanted_field_get_str("tracee.args.sched_process_exec.pathname");
     cmdline = wanted_field_get_str("tracee.args.command_line");
+    dissector_data->process->command_line = cmdline;
 
     if (pathname && cmdline) {
         if (strncmp(pathname, cmdline, strlen(pathname)) == 0)

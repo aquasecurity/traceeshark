@@ -133,6 +133,13 @@ static gchar *process_tree_get_node_name(gint32 pid, struct process_info *proces
     tmp_str = node_name;
     node_name = g_strdup_printf("%s (%s)", node_name, process->name);
     g_free(tmp_str);
+
+    if (process->command_line != NULL) {
+        tmp_str = node_name;
+        node_name = g_strdup_printf("%s: %s", node_name, process->command_line);
+        g_free(tmp_str);
+    }
+    
     return node_name;
 }
 

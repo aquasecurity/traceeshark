@@ -55,9 +55,16 @@ void process_tree_update(struct tracee_dissector_data *data)
         *pid_key = process->host_pid;
         wmem_map_insert(processes, pid_key, process);
     }
-    // this process already has info, update the process name from the event if needed
-    else if (strcmp(process->name, data->process->name) != 0)
-        process->name = wmem_strdup(wmem_file_scope(), data->process->name);
+    // this process already has info
+    else {
+        // update the process name from the event if needed
+        if (strcmp(process->name, data->process->name) != 0)
+            process->name = wmem_strdup(wmem_file_scope(), data->process->name);
+        
+        // update the command line from the event if needed
+        if (strcmp(data->event_name, "sched_process_exec") == 0)
+            process->command_line = wmem_strdup(wmem_file_scope(), data->process->command_line);
+    }
 }
 
 static void free_process_node_cb(gpointer data)
