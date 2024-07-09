@@ -2202,15 +2202,15 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     dissector_data->process = wmem_new0(pinfo->pool, struct process_info);
     dissect_event_fields(tvb, pinfo, tracee_json_tree, tracee_json_item, json_data, dissector_data);
 
-    // update process tree if it's the first time seeing this event
-    if (!pinfo->fd->visited)
-        process_tree_update(dissector_data);
-
     // this event contains a packet, dissect it
     if (dissector_data->packet_tvb != NULL)
         return call_dissector(ip_dissector, dissector_data->packet_tvb, pinfo, tree);
 
     dissector_try_string(event_name_dissector_table, dissector_data->event_name, tvb, pinfo, tree, dissector_data);
+
+    // update process tree if it's the first time seeing this event
+    if (!pinfo->fd->visited)
+        process_tree_update(dissector_data);
 
     tap_queue_packet(tracee_tap, pinfo, dissector_data);
 
