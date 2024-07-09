@@ -58,6 +58,8 @@ proto_item *proto_tree_add_uint64_wanted(proto_tree *tree, int hfindex, tvbuff_t
 proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, const char* value);
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
 
+gchar *enrichments_get_security_socket_bind_connect_description(packet_info *pinfo, const gchar *verb);
+
 void process_tree_init(void);
 void process_tree_update(struct tracee_dissector_data *data);
 GTree *process_tree_construct(void);
