@@ -80,6 +80,7 @@ static tap_packet_status event_counts_stats_tree_packet(stats_tree* st, packet_i
 }
 
 struct process_stat_node {
+    int id;
     int parent_id;
     gchar *name;
 };
@@ -138,7 +139,6 @@ static gchar *process_tree_get_node_name(gint32 pid, struct process_info *proces
 static void process_tree_stats_tree_add_process(stats_tree *st, struct process_tree_stats_context *context, gint32 pid, int parent_node_id)
 {
     guint i;
-    int node_id;
     int *nodes_key;
     struct process_stat_node *node;
     struct process_info *process;
@@ -150,8 +150,7 @@ static void process_tree_stats_tree_add_process(stats_tree *st, struct process_t
 
     node->parent_id = parent_node_id;
     node->name = process_tree_get_node_name(pid, process);
-    
-    node_id = stats_tree_create_node(st, node->name, parent_node_id, STAT_DT_INT, (children_pids->len > 0));
+    node->id = stats_tree_create_node(st, node->name, parent_node_id, STAT_DT_INT, (children_pids->len > 0));
 
     nodes_key = g_new(int, 1);
     *nodes_key = pid;
@@ -159,7 +158,7 @@ static void process_tree_stats_tree_add_process(stats_tree *st, struct process_t
 
     // iterate through all children, adding each one to the stats tree by calling this function recursively
     for (i = 0; i < children_pids->len; i++)
-        process_tree_stats_tree_add_process(st, context, g_array_index(children_pids, gint32, i), node_id);
+        process_tree_stats_tree_add_process(st, context, g_array_index(children_pids, gint32, i), node->id);
     
     g_array_free(children_pids, FALSE);
 }
@@ -209,6 +208,40 @@ static tap_packet_status process_tree_stats_tree_packet(stats_tree* st, packet_i
     return TAP_PACKET_REDRAW;
 }
 
+#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
+static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* st, packet_info* pinfo,
+    epan_dissect_t* edt _U_, const void* p)
+#else
+static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* st, packet_info* pinfo,
+    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
+#endif
+{
+    struct process_tree_stats_context *context;
+    struct process_stat_node *node;
+    const gchar *pathname, *file_type, *file_node_name;
+    struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+
+    DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+
+    if (data->process == NULL || data->process->host_pid == 0)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    // we only care about magic_write events
+    if (strcmp(data->event_name, "magic_write") != 0)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    DISSECTOR_ASSERT((node = g_hash_table_lookup(context->process_stat_nodes, &data->process->host_pid)) != NULL);
+    tick_stat_node(st, node->name, node->parent_id, TRUE);
+
+    DISSECTOR_ASSERT((pathname = wanted_field_get_str("tracee.args.magic_write.pathname")) != NULL);
+    file_type = wanted_field_get_str("tracee.args.magic_write.file_type");
+
+    file_node_name = wmem_strdup_printf(pinfo->pool, "%s file%s: %s", file_type == NULL ? "Unknown" : file_type, file_type == NULL ? " type": "", pathname);
+    tick_stat_node(st, file_node_name, node->id, FALSE);
+
+    return TAP_PACKET_REDRAW;
+}
+
 static void process_tree_stats_tree_cleanup(stats_tree *st)
 {
     struct process_tree_stats_context *context;
@@ -222,22 +255,32 @@ static void process_tree_stats_tree_cleanup(stats_tree *st)
 
 void register_tracee_statistics(void)
 {
+    // needed for process tree with files
+    register_wanted_field("tracee.args.magic_write.pathname");
+    register_wanted_field("tracee.args.magic_write.file_type");
+
     stats_tree_context = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
 
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3))) // new stats tree API
-    stats_tree_cfg *event_counts_st, *process_tree_st;
+    stats_tree_cfg *event_counts_st, *process_tree_st, *process_tree_with_files_st;
 
     event_counts_st = stats_tree_register_plugin("tracee", "tracee_events", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts",
         0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
     stats_tree_set_first_column_name(event_counts_st, "Event Name");
 
-    process_tree_st = stats_tree_register_plugin("tracee", "tracee_processes", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree",
+    process_tree_st = stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree",
         0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
     stats_tree_set_first_column_name(process_tree_st, "Process");
+
+    process_tree_with_files_st = stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with files)",
+        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+    stats_tree_set_first_column_name(process_tree_with_files_st, "Process/File");
 #else // old stats tree API
     stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
         0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_processes", "Tracee/Process Tree",
+    stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee/Process Tree",
         0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+    stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee/Process Tree (with files)",
+        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
 #endif
 }

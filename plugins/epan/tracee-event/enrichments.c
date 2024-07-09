@@ -248,10 +248,6 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     const char *decoded_string, *file_type;
     proto_item *tmp_item;
 
-    if (dissector_data->args_tree == NULL) {
-        return 0;
-    }
-
     if ((bytes = wanted_field_get_str("tracee.args.magic_write.bytes")) == NULL)
         return 0;
     
@@ -260,12 +256,12 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 
     // add decoded data
     decoded_string = stringify_decoded_data(pinfo, decoded_data, len);
-    tmp_item = proto_tree_add_string(dissector_data->args_tree, hf_decoded_data, tvb, 0, 0, decoded_string);
+    tmp_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_decoded_data, tvb, 0, 0, decoded_string);
     proto_item_set_generated(tmp_item);
 
     // add file type, if known
     if ((file_type = get_file_type(decoded_data, len)) != NULL) {
-        tmp_item = proto_tree_add_string(dissector_data->args_tree, hf_file_type, tvb, 0, 0, file_type);
+        tmp_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_file_type, tvb, 0, 0, file_type);
         proto_item_set_generated(tmp_item);
     }
 
