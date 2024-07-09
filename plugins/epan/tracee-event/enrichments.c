@@ -99,14 +99,12 @@ static int enrich_net_packet_http(tvbuff_t *tvb _U_, packet_info *pinfo, proto_t
     return 0;
 }
 
-static int enrich_security_socket_bind_connect(packet_info *pinfo, const gchar *verb)
+gchar *enrichments_get_security_socket_bind_connect_description(packet_info *pinfo, const gchar *verb)
 {
     const gchar *family, *addr, *port = NULL;
 
-    family = wanted_field_get_str("tracee.sockaddr.sa_family");
-
-    if (family == NULL)
-        return 0;
+    if ((family = wanted_field_get_str("tracee.sockaddr.sa_family")) == NULL)
+        return NULL;
     
     if (strcmp(family, "AF_INET") == 0) {
         addr = wanted_field_get_str("tracee.sockaddr.sin_addr");
@@ -120,15 +118,25 @@ static int enrich_security_socket_bind_connect(packet_info *pinfo, const gchar *
         addr = wanted_field_get_str("tracee.sockaddr.sun_path");
     }
     else
-        return 0;
+        return NULL;
     
     if (addr) {
         if (port)
-            col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s port %s", verb, addr, port);
+            return wmem_strdup_printf(pinfo->pool, "%s to %s port %s", verb, addr, port);
         else
-            col_add_fstr(pinfo->cinfo, COL_INFO, "%s to %s", verb, addr);
+            return wmem_strdup_printf(pinfo->pool, "%s to %s", verb, addr);
     }
+    
+    return NULL;
+}
 
+static int enrich_security_socket_bind_connect(packet_info *pinfo, const gchar *verb)
+{
+    gchar *description = enrichments_get_security_socket_bind_connect_description(pinfo,verb);
+
+    if (description != NULL)
+        col_add_str(pinfo->cinfo, COL_INFO, description);
+    
     return 0;
 }
 
