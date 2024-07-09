@@ -13,6 +13,8 @@ static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, prot
 
     pathname = wanted_field_get_str("tracee.args.sched_process_exec.pathname");
     cmdline = wanted_field_get_str("tracee.args.command_line");
+
+    dissector_data->process->exec_path = pathname;
     dissector_data->process->command_line = cmdline;
 
     if (pathname && cmdline) {

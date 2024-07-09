@@ -51,6 +51,10 @@ void process_tree_update(struct tracee_dissector_data *data)
     if ((process = wmem_map_lookup(processes, &data->process->host_pid)) == NULL) {
         process = wmem_memdup(wmem_file_scope(), data->process, sizeof(struct process_info));
         process->name = wmem_strdup(wmem_file_scope(), data->process->name);
+        if (process->exec_path != NULL)
+            process->exec_path = wmem_strdup(wmem_file_scope(), process->exec_path);
+        if (process->command_line != NULL)
+            process->command_line = wmem_strdup(wmem_file_scope(), process->command_line);
         pid_key = wmem_new(wmem_file_scope(), gint);
         *pid_key = process->host_pid;
         wmem_map_insert(processes, pid_key, process);
@@ -62,8 +66,10 @@ void process_tree_update(struct tracee_dissector_data *data)
             process->name = wmem_strdup(wmem_file_scope(), data->process->name);
         
         // update the command line from the event if needed
-        if (strcmp(data->event_name, "sched_process_exec") == 0)
+        if (strcmp(data->event_name, "sched_process_exec") == 0) {
+            process->exec_path = wmem_strdup(wmem_file_scope(), data->process->exec_path);
             process->command_line = wmem_strdup(wmem_file_scope(), data->process->command_line);
+        }
     }
 }
 
