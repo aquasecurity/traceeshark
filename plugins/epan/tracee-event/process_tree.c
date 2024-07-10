@@ -2,7 +2,6 @@
 
 struct process_node {
     struct process_info *process;
-    GHashTable *children;
     gint32 parent_pid;
 };
 
@@ -73,14 +72,6 @@ void process_tree_update(struct tracee_dissector_data *data)
     }
 }
 
-static void free_process_node_cb(gpointer data)
-{
-    struct process_node *node = (struct process_node *)data;
-
-    g_hash_table_destroy(node->children);
-    g_free(node);
-}
-
 static void process_tree_construct_cb(gpointer key, gpointer value, gpointer user_data)
 {
     struct process_node *node, *parent_node;
@@ -96,9 +87,6 @@ static void process_tree_construct_cb(gpointer key, gpointer value, gpointer use
     else {
         node = g_new0(struct process_node, 1);
         node->process = process;
-        node->children = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, NULL);
-
-        // insert node into the tree
         pid_key = g_new(gint32, 1);
         *pid_key = pid;
         g_tree_insert(process_tree, pid_key, node);
@@ -119,16 +107,10 @@ static void process_tree_construct_cb(gpointer key, gpointer value, gpointer use
     // the parent is not in the tree yet - insert it
     if ((parent_node = g_tree_lookup(process_tree, &ppid)) == NULL) {
         parent_node = g_new0(struct process_node, 1);
-        parent_node->children = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, NULL);
         pid_key = g_new(gint32, 1);
         *pid_key = ppid;
         g_tree_insert(process_tree, pid_key, parent_node);
     }
-    
-    // update chidren list
-    pid_key = g_new(gint32, 1);
-    *pid_key = pid;
-    g_hash_table_insert(parent_node->children, pid_key, node);
 }
 
 static gint pid_compare(gconstpointer a, gconstpointer b, gpointer user_data _U_)
@@ -138,33 +120,12 @@ static gint pid_compare(gconstpointer a, gconstpointer b, gpointer user_data _U_
 
 GTree *process_tree_construct(void)
 {
-    GTree *process_tree = g_tree_new_full(pid_compare, NULL, g_free, free_process_node_cb);
+    GTree *process_tree = g_tree_new_full(pid_compare, NULL, g_free, g_free);
     
     // iterate through all processes, adding them to the tree
     wmem_map_foreach(processes, process_tree_construct_cb, process_tree);
 
     return process_tree;
-}
-
-static gboolean get_root_pids_cb(gpointer key, gpointer value, gpointer data)
-{
-    gint32 pid = *(gint32 *)key;
-    struct process_node *node = (struct process_node *)value;
-    GArray *root_pids = (GArray *)data;
-
-    if (node->parent_pid == 0)
-        g_array_append_val(root_pids, pid);
-
-    // return FALSE so the traversal isn't stopped
-    return FALSE;
-}
-
-GArray *process_tree_get_root_pids(GTree *process_tree)
-{
-    GArray *root_pids = g_array_new(FALSE, FALSE, sizeof(gint32));
-
-    g_tree_foreach(process_tree, get_root_pids_cb, root_pids);
-    return root_pids;
 }
 
 struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid)
@@ -189,25 +150,4 @@ struct process_info *process_tree_get_parent(GTree *process_tree, gint32 pid)
     
     DISSECTOR_ASSERT((parent_node = g_tree_lookup(process_tree, &node->parent_pid)) != NULL);
     return parent_node->process;
-}
-
-static void get_children_pids_cb(gpointer key, gpointer value _U_, gpointer user_data)
-{
-    gint32 pid = *(gint32 *)key;
-    GArray *children_pids = (GArray *)user_data;
-
-    g_array_append_val(children_pids, pid);
-}
-
-GArray *process_tree_get_children_pids(GTree *process_tree, gint32 pid)
-{
-    struct process_node *node;
-    GArray *children_pids;
-
-    DISSECTOR_ASSERT((node = g_tree_lookup(process_tree, &pid)) != NULL);
-    children_pids = g_array_new(FALSE, FALSE, sizeof(gint32));
-
-    g_hash_table_foreach(node->children, get_children_pids_cb, children_pids);
-
-    return children_pids;
 }
