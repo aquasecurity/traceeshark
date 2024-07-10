@@ -2204,7 +2204,7 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
 
     // update process tree if it's the first time seeing this event
     if (!pinfo->fd->visited)
-        process_tree_update(dissector_data->process);
+        process_tree_update(dissector_data);
 
     // this event contains a packet, dissect it
     if (dissector_data->packet_tvb != NULL)

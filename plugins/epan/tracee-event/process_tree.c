@@ -2,105 +2,164 @@
 
 struct process_node {
     struct process_info *process;
-    wmem_map_t *children;
+    GHashTable *children;
     bool has_parent;
 };
 
-wmem_tree_t *process_tree;
+// map from PID to process info
+wmem_map_t *processes;
+
+// map from PID to process parent exctracted from fork events
+wmem_map_t *process_real_parents;
 
 void process_tree_init(void)
 {
-    process_tree = wmem_tree_new_autoreset(wmem_epan_scope(), wmem_file_scope());
+    processes = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_int_hash, g_int_equal);
+    process_real_parents = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_int_hash, g_int_equal);
+
+    // register fields needed from fork event
+    register_wanted_field("tracee.args.sched_process_fork.child_pid");
+    register_wanted_field("tracee.args.sched_process_fork.child_tid");
 }
 
-void process_tree_update(struct process_info *process)
+void process_tree_update(struct tracee_dissector_data *data)
 {
-    struct process_node *node, *parent;
-    gint32 *children_list_key;
+    gint *fork_child_pid, *fork_child_tid;
+    gint *pid_key, *pid_val;
+    struct process_info *process;
+
+    // this is a fork event - update the real parents map
+    if (strcmp(data->event_name, "sched_process_fork") == 0) {
+        DISSECTOR_ASSERT((fork_child_pid = wanted_field_get_int("tracee.args.sched_process_fork.child_pid")) != NULL);
+        DISSECTOR_ASSERT((fork_child_tid = wanted_field_get_int("tracee.args.sched_process_fork.child_tid")) != NULL);
+
+        // PID and TID are the same - this is a new process
+        if (*fork_child_pid == *fork_child_tid) {
+            pid_key = wmem_new(wmem_file_scope(), gint);
+            *pid_key = *fork_child_pid;
+            pid_val = wmem_new(wmem_file_scope(), gint);
+            *pid_val = data->process->host_pid;
+            wmem_map_insert(process_real_parents, pid_key, pid_val);
+        }
+    }
 
     // ignore PID 0
-    if (process->host_pid == 0)
+    if (data->process->host_pid == 0)
         return;
 
-    // this process does not exist in the tree yet - insert it
-    if ((node = wmem_tree_lookup32(process_tree, process->host_pid)) == NULL) {
-        node = wmem_new0(wmem_file_scope(), struct process_node);
-        node->children = wmem_map_new(wmem_file_scope(), g_int_hash, g_int_equal);
-        wmem_tree_insert32(process_tree, process->host_pid, node);
+    // this process does not exist in the processes map yet - insert it
+    if ((process = wmem_map_lookup(processes, &data->process->host_pid)) == NULL) {
+        process = wmem_memdup(wmem_file_scope(), data->process, sizeof(struct process_info));
+        process->name = wmem_strdup(wmem_file_scope(), data->process->name);
+        pid_key = wmem_new(wmem_file_scope(), gint);
+        *pid_key = process->host_pid;
+        wmem_map_insert(processes, pid_key, process);
     }
-
-    // this process has no info yet - add it
-    if (node->process == NULL) {
-        node->process = wmem_memdup(wmem_file_scope(), process, sizeof(*process));
-        node->process->name = wmem_strdup(wmem_file_scope(), node->process->name);
-    }
-    // this process already has info
-    else {
-        // update the process name from the event if needed
-        if (strcmp(node->process->name, process->name) != 0)
-            node->process->name = wmem_strdup(wmem_file_scope(), process->name);
-
-        // the logic from this point onwards deals with the parent, it should be done only
-        // if this is the first time we encounter this process to avoid inconsistencies
-        // when a process has multiple parents across the capture (can happen if it got orphaned)
-        return;
-    }
-    
-    // this process has no parent
-    if (process->host_ppid == 0)
-        return;
-    
-    // make sure the parent process exists in the tree
-    if ((parent = wmem_tree_lookup32(process_tree, process->host_ppid)) == NULL) {
-        parent = wmem_new0(wmem_file_scope(), struct process_node);
-        parent->children = wmem_map_new(wmem_file_scope(), g_int_hash, g_int_equal);
-        parent->has_parent = FALSE;
-        wmem_tree_insert32(process_tree, process->host_ppid, parent);
-        node->has_parent = TRUE;
-    }
-    else
-        node->has_parent = TRUE;
-
-    // this process is not in its parent's children list - add it
-    if (!wmem_map_contains(parent->children, &process->host_pid)) {
-        children_list_key = wmem_new(wmem_file_scope(), gint32);
-        *children_list_key = process->host_pid;
-        wmem_map_insert(parent->children, children_list_key, node);
-    }
+    // this process already has info, update the process name from the event if needed
+    else if (strcmp(process->name, data->process->name) != 0)
+        process->name = wmem_strdup(wmem_file_scope(), data->process->name);
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR < 1)))
-static gboolean get_root_pids_cb(const void *key, void *value, void *userdata)
-#else
-static bool get_root_pids_cb(const void *key, void *value, void *userdata)
-#endif
+static void free_process_node_cb(gpointer data)
 {
-    guint key_val;
-    struct process_node *node = (struct process_node *)value;
-    GArray *root_pids = (GArray *)userdata;
+    struct process_node *node = (struct process_node *)data;
 
-    if (!node->has_parent) {
-        key_val = GPOINTER_TO_UINT(key);
-        g_array_append_val(root_pids, key_val);
+    g_hash_table_destroy(node->children);
+    g_free(node);
+}
+
+static void process_tree_construct_cb(gpointer key, gpointer value, gpointer user_data)
+{
+    struct process_node *node, *parent_node;
+    gint32 *pid_key, *ppid_val, ppid;
+    gint32 pid = *(gint32 *)key;
+    struct process_info *process = (struct process_info *)value;
+    GTree *process_tree = (GTree *)user_data;
+
+    // this process already exists in the tree (as a parent of a previously seen process) - update its info
+    if ((node = g_tree_lookup(process_tree, &process->host_pid)) != NULL)
+        node->process = process;
+    // create process node and insert it
+    else {
+        node = g_new0(struct process_node, 1);
+        node->process = process;
+        node->children = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, NULL);
+
+        // insert node into the tree
+        pid_key = g_new(gint32, 1);
+        *pid_key = pid;
+        g_tree_insert(process_tree, pid_key, node);
     }
+
+    // get effective PPID of this process
+    if ((ppid_val = wmem_map_lookup(process_real_parents, &pid)) != NULL)
+        ppid = *ppid_val;
+    else
+        ppid = process->host_ppid;
+    
+    if (ppid == 0) {
+        return;
+    }
+
+    node->has_parent = TRUE;
+    
+    // the parent is not in the tree yet - insert it
+    if ((parent_node = g_tree_lookup(process_tree, &ppid)) == NULL) {
+        parent_node = g_new0(struct process_node, 1);
+        parent_node->children = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, NULL);
+        parent_node->has_parent = FALSE;
+        pid_key = g_new(gint32, 1);
+        *pid_key = ppid;
+        g_tree_insert(process_tree, pid_key, parent_node);
+    }
+    
+    // update chidren list
+    pid_key = g_new(gint32, 1);
+    *pid_key = pid;
+    g_hash_table_insert(parent_node->children, pid_key, node);
+}
+
+static gint pid_compare(gconstpointer a, gconstpointer b, gpointer user_data _U_)
+{
+    return *(gint32 *)a - *(gint32 *)b;
+}
+
+GTree *process_tree_construct(void)
+{
+    GTree *process_tree = g_tree_new_full(pid_compare, NULL, g_free, free_process_node_cb);
+    
+    // iterate through all processes, adding them to the tree
+    wmem_map_foreach(processes, process_tree_construct_cb, process_tree);
+
+    return process_tree;
+}
+
+static gboolean get_root_pids_cb(gpointer key, gpointer value, gpointer data)
+{
+    gint32 pid = *(gint32 *)key;
+    struct process_node *node = (struct process_node *)value;
+    GArray *root_pids = (GArray *)data;
+
+    if (!node->has_parent)
+        g_array_append_val(root_pids, pid);
 
     // return FALSE so the traversal isn't stopped
     return FALSE;
 }
 
-GArray *process_tree_get_root_pids(void)
+GArray *process_tree_get_root_pids(GTree *process_tree)
 {
     GArray *root_pids = g_array_new(FALSE, FALSE, sizeof(gint32));
 
-    wmem_tree_foreach(process_tree, get_root_pids_cb, root_pids);
+    g_tree_foreach(process_tree, get_root_pids_cb, root_pids);
     return root_pids;
 }
 
-struct process_info *process_tree_get_process(gint32 pid)
+struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid)
 {
     struct process_node *node;
 
-    if ((node = wmem_tree_lookup32(process_tree, pid)) == NULL)
+    if ((node = g_tree_lookup(process_tree, &pid)) == NULL)
         return NULL;
     
     return node->process;
@@ -114,15 +173,15 @@ static void get_children_pids_cb(gpointer key, gpointer value _U_, gpointer user
     g_array_append_val(children_pids, pid);
 }
 
-GArray *process_tree_get_children_pids(gint32 pid)
+GArray *process_tree_get_children_pids(GTree *process_tree, gint32 pid)
 {
     struct process_node *node;
     GArray *children_pids;
 
-    DISSECTOR_ASSERT((node = wmem_tree_lookup32(process_tree, pid)) != NULL);
+    DISSECTOR_ASSERT((node = g_tree_lookup(process_tree, &pid)) != NULL);
     children_pids = g_array_new(FALSE, FALSE, sizeof(gint32));
 
-    wmem_map_foreach(node->children, get_children_pids_cb, children_pids);
+    g_hash_table_foreach(node->children, get_children_pids_cb, children_pids);
 
     return children_pids;
 }
