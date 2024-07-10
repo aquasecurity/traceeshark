@@ -66,6 +66,7 @@ void process_tree_update(struct tracee_dissector_data *data);
 GTree *process_tree_construct(void);
 GArray *process_tree_get_root_pids(GTree *process_tree);
 struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid);
+struct process_info *process_tree_get_parent(GTree *process_tree, gint32 pid);
 GArray *process_tree_get_children_pids(GTree *process_tree, gint32 pid);
 
 void register_tracee_enrichments(int proto);
