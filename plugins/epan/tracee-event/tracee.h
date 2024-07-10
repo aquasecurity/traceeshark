@@ -21,6 +21,7 @@ struct tracee_dissector_data {
     const gchar *event_name;
     gboolean is_signature;
     gint32 signature_severity;
+    const gchar *signature_name;
     tvbuff_t *packet_tvb;
     struct process_info *process;
 };

@@ -2096,6 +2096,7 @@ static gchar *dissect_metadata_fields(tvbuff_t *tvb, packet_info *pinfo, proto_t
     // add signature name
     DISSECTOR_ASSERT((signature_name = json_get_string(json_data, properties_tok, "signatureName")) != NULL);
     proto_tree_add_string(properties_tree, hf_metadata_properties_signature_name, tvb, 0, 0, signature_name);
+    data->signature_name = wmem_strdup(pinfo->pool, signature_name);
 
     return signature_name;
 }
