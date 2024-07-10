@@ -46,7 +46,7 @@ copy-all:
 
 build:
 	@if [ -d "wireshark/build" ]; then \
-        ninja -C wireshark/build; \
+        ninja -C wireshark/build -j$(shell nproc); \
     else \
         error "Build directory doesn't exist, run \"make cmake\" first"; \
     fi
