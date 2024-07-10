@@ -37,7 +37,7 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt update
-        sudo apt install -y ninja-build
+        sudo apt install -y ninja-build ccache
         sudo wireshark/tools/debian-setup.sh
     
     - name: Install dependencies (Macos)
