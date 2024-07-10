@@ -289,6 +289,34 @@ static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree*
     return TAP_PACKET_REDRAW;
 }
 
+#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
+static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p)
+#else
+static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
+#endif
+{
+    struct process_tree_stats_context *context;
+    struct process_stat_node *node;
+    struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+
+    DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+
+    if (data->process == NULL || data->process->host_pid == 0)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    // we only care about signatures with severity of 1 or higher
+    if (!data->is_signature || data->signature_severity < 1)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
+    tick_stat_node(st, node->name, node->parent_id, TRUE);
+    tick_stat_node(st, data->signature_name, node->id, FALSE);
+
+    return TAP_PACKET_REDRAW;
+}
+
 static void process_tree_stats_tree_cleanup(stats_tree *st)
 {
     struct process_tree_stats_context *context;
@@ -317,7 +345,8 @@ void register_tracee_statistics(void)
     stats_tree_context = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
 
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3))) // new stats tree API
-    stats_tree_cfg *event_counts_st, *process_tree_st, *process_tree_with_files_st, *process_tree_with_network_st;
+    stats_tree_cfg *event_counts_st, *process_tree_st, *process_tree_with_files_st,
+        *process_tree_with_network_st, *process_tree_with_signatures_st;
 
     event_counts_st = stats_tree_register_plugin("tracee", "tracee_events", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts",
         0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
@@ -334,6 +363,10 @@ void register_tracee_statistics(void)
     process_tree_with_network_st = stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with network)",
         0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
     stats_tree_set_first_column_name(process_tree_with_network_st, "Process/Network activity");
+
+    process_tree_with_signatures_st = stats_tree_register_plugin("tracee", "tracee_process_tree_signatures", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with signatures)",
+        0, process_tree_with_signatures_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+    stats_tree_set_first_column_name(process_tree_with_signatures_st, "Process/Signature");
 #else // old stats tree API
     stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
         0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
@@ -343,5 +376,7 @@ void register_tracee_statistics(void)
         0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
     stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee/Process Tree (with network)",
         0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+    stats_tree_register_plugin("tracee", "tracee_process_tree_signatures", "Tracee/Process Tree (with signatures)",
+        0, process_tree_with_signatures_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
 #endif
 }
