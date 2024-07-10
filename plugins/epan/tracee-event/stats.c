@@ -151,39 +151,57 @@ static gchar *process_tree_get_node_name(gint32 pid, struct process_info *proces
     return node_name;
 }
 
-static void process_tree_stats_tree_add_process(stats_tree *st, struct process_tree_stats_context *context, gint32 pid, int parent_node_id)
+static struct process_stat_node *process_tree_stats_tree_add_process(stats_tree *st, struct process_tree_stats_context *context, gint32 pid, int parent_node_id)
 {
-    guint i;
-    int *nodes_key;
     struct process_stat_node *node;
-    struct process_info *process;
-    GArray *children_pids;
+    int *nodes_key;
+
+    // this process already has a stat node
+    if ((node = g_hash_table_lookup(context->process_stat_nodes, &pid)) != NULL)
+        return node;
 
     node = g_new0(struct process_stat_node, 1);
-    process = process_tree_get_process(context->process_tree, pid);
-    children_pids = process_tree_get_children_pids(context->process_tree, pid);
-
     node->parent_id = parent_node_id;
-    node->name = process_tree_get_node_name(pid, process);
+    node->name = process_tree_get_node_name(pid, process_tree_get_process(context->process_tree, pid));
     node->id = stats_tree_create_node(st, node->name, parent_node_id, STAT_DT_INT, TRUE);
 
     nodes_key = g_new(int, 1);
     *nodes_key = pid;
     g_hash_table_insert(context->process_stat_nodes, nodes_key, node);
 
+    return node;
+}
+
+static void process_tree_stats_tree_add_process_and_children(stats_tree *st, struct process_tree_stats_context *context, gint32 pid, int parent_node_id)
+{
+    struct process_stat_node *node;
+    guint i;
+    GArray *children_pids;
+
+    node = process_tree_stats_tree_add_process(st, context, pid, parent_node_id);
+
     // iterate through all children, adding each one to the stats tree by calling this function recursively
+    children_pids = process_tree_get_children_pids(context->process_tree, pid);
     for (i = 0; i < children_pids->len; i++)
-        process_tree_stats_tree_add_process(st, context, g_array_index(children_pids, gint32, i), node->id);
-    
+        process_tree_stats_tree_add_process_and_children(st, context, g_array_index(children_pids, gint32, i), node->id);
     g_array_free(children_pids, FALSE);
 }
 
-static void process_tree_stats_tree_init(stats_tree *st)
+static struct process_stat_node *process_tree_stats_tree_add_process_and_ancestors(stats_tree *st, struct process_tree_stats_context *context, gint32 pid)
 {
-    guint i;
-    struct process_tree_stats_context *context;
-    GArray *root_pids;
+    struct process_info *parent;
+    struct process_stat_node *parent_node = NULL;
+
+    if ((parent = process_tree_get_parent(context->process_tree, pid)) != NULL)
+        parent_node = process_tree_stats_tree_add_process_and_ancestors(st, context, parent->host_pid);
     
+    return process_tree_stats_tree_add_process(st, context, pid, parent_node == NULL ? 0 : parent_node->id);
+}
+
+static struct process_tree_stats_context *process_tree_stats_tree_init_context(stats_tree *st)
+{
+    struct process_tree_stats_context *context;
+
     // create the context for this process tree stats window and insert it into the global context hash table
     context = g_new(struct process_tree_stats_context, 1);
     context->process_stat_nodes = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, free_process_stat_node);
@@ -192,10 +210,19 @@ static void process_tree_stats_tree_init(stats_tree *st)
     *key = (gint64)st;
     g_hash_table_insert(stats_tree_context, key, context);
 
+    return context;
+}
+
+static void process_tree_stats_tree_init(stats_tree *st)
+{
+    guint i;
+    GArray *root_pids;
+    struct process_tree_stats_context *context = process_tree_stats_tree_init_context(st);
+
     // generate a list of process tree roots and create the stats tree from them
     root_pids = process_tree_get_root_pids(context->process_tree);
     for (i = 0; i < root_pids->len; i++)
-        process_tree_stats_tree_add_process(st, context, g_array_index(root_pids, gint32, i), 0);
+        process_tree_stats_tree_add_process_and_children(st, context, g_array_index(root_pids, gint32, i), 0);
     
     g_array_free(root_pids, FALSE);
 }
@@ -223,6 +250,11 @@ static tap_packet_status process_tree_stats_tree_packet(stats_tree* st, packet_i
     return TAP_PACKET_REDRAW;
 }
 
+static void process_tree_stats_tree_init_empty(stats_tree *st)
+{
+    process_tree_stats_tree_init_context(st);
+}
+
 #if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
 static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* st, packet_info* pinfo,
     epan_dissect_t* edt _U_, const void* p)
@@ -245,7 +277,7 @@ static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* s
     if (strcmp(data->event_name, "magic_write") != 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    DISSECTOR_ASSERT((node = g_hash_table_lookup(context->process_stat_nodes, &data->process->host_pid)) != NULL);
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
 
     DISSECTOR_ASSERT((pathname = wanted_field_get_str("tracee.args.magic_write.pathname")) != NULL);
@@ -283,7 +315,7 @@ static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree*
     else
         return TAP_PACKET_DONT_REDRAW;
     
-    DISSECTOR_ASSERT((node = g_hash_table_lookup(context->process_stat_nodes, &data->process->host_pid)) != NULL);
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
     
     if (description != NULL) {
         tick_stat_node(st, node->name, node->parent_id, TRUE);
@@ -332,11 +364,11 @@ void register_tracee_statistics(void)
     stats_tree_set_first_column_name(process_tree_st, "Process");
 
     process_tree_with_files_st = stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with files)",
-        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init_empty, process_tree_stats_tree_cleanup);
     stats_tree_set_first_column_name(process_tree_with_files_st, "Process/File");
 
     process_tree_with_network_st = stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with network)",
-        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init_empty, process_tree_stats_tree_cleanup);
     stats_tree_set_first_column_name(process_tree_with_network_st, "Process/Network activity");
 #else // old stats tree API
     stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
@@ -344,8 +376,8 @@ void register_tracee_statistics(void)
     stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee/Process Tree",
         0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
     stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee/Process Tree (with files)",
-        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init_empty, process_tree_stats_tree_cleanup);
     stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee/Process Tree (with network)",
-        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
+        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init_empty, process_tree_stats_tree_cleanup);
 #endif
 }
