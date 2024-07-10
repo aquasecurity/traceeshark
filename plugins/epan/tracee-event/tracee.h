@@ -58,10 +58,11 @@ proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
 
 void process_tree_init(void);
-void process_tree_update(struct process_info *process);
-GArray *process_tree_get_root_pids(void);
-struct process_info *process_tree_get_process(gint32 pid);
-GArray *process_tree_get_children_pids(gint32 pid);
+void process_tree_update(struct tracee_dissector_data *data);
+GTree *process_tree_construct(void);
+GArray *process_tree_get_root_pids(GTree *process_tree);
+struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid);
+GArray *process_tree_get_children_pids(GTree *process_tree, gint32 pid);
 
 void register_tracee_enrichments(int proto);
 void register_tracee_statistics(void);
