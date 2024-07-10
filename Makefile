@@ -2,6 +2,12 @@ include .env
 export
 
 OS_NAME := $(shell uname -s)
+WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
+ifeq ($(OS_NAME),Darwin)
+	WS_VERSION_DIR := $(subst .,-,$(WS_VERSION_SHORT))
+else
+	WS_VERSION_DIR := $(WS_VERSION_SHORT)
+endif
 
 # update wireshark source tree and build
 all: copy-source build
@@ -53,17 +59,17 @@ build:
 
 # update private configuration profile
 install:
-	$(eval WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+"))
 	@mkdir -p ~/.config/wireshark
 	@cp -r profiles ~/.config/wireshark
 	
 	@mkdir -p ~/.local/lib/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.local/lib/wireshark/extcap
-	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py
 	@if [ "$(OS_NAME)" = "Darwin" ]; then \
+		sed -i '' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py; \
 		cp extcap/tracee-capture.sh ~/.local/lib/wireshark/extcap; \
 		chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.sh; \
 	else \
+		sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.local/lib/wireshark/extcap/tracee-capture.py; \
 		chmod +x ~/.local/lib/wireshark/extcap/tracee-capture.py; \
 	fi
 	@cp -r extcap/tracee-capture ~/.local/lib/wireshark/extcap
@@ -71,44 +77,28 @@ install:
 
 	@mkdir -p ~/.config/wireshark/extcap
 	@cp extcap/tracee-capture.py ~/.config/wireshark/extcap
-	@sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py
 	@if [ "$(OS_NAME)" = "Darwin" ]; then \
+		sed -i '' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py; \
 		cp extcap/tracee-capture.sh ~/.config/wireshark/extcap; \
 		chmod +x ~/.config/wireshark/extcap/tracee-capture.sh; \
 	else \
+		sed -i'' -e 's/VERSION_PLACEHOLDER/$(TRACEESHARK_VERSION)/g' ~/.config/wireshark/extcap/tracee-capture.py; \
 		chmod +x ~/.config/wireshark/extcap/tracee-capture.py; \
 	fi
 	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
 	@chmod +x ~/.config/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
-	@mkdir -p ~/.local/lib/wireshark/plugins/epan
-	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan
+	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan
+	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap
 
-	@if [ -e "wireshark/build/run/tracee-event" ]; then \
-		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/epan/tracee-event.so; \
-		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan/tracee-event.so; \
+	@if [ "$(OS_NAME)" = "Darwin" ]; then \
+		cp wireshark/build/run/tracee-event ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-event.so; \
+		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-network-capture.so; \
+		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap/tracee-json.so; \
 	else \
-		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/epan; \
-		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan; \
-	fi
-
-	@if [ -e "wireshark/build/run/tracee-network-capture" ]; then \
-		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/epan/tracee-network-capture.so; \
-		cp wireshark/build/run/tracee-network-capture ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan/tracee-network-capture.so; \
-	else \
-		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/epan; \
-		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/epan; \
-	fi
-
-	@mkdir -p ~/.local/lib/wireshark/plugins/wiretap
-	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap
-
-	@if [ -e "wireshark/build/run/tracee-json" ]; then \
-		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/wiretap/tracee-json.so; \
-		cp wireshark/build/run/tracee-json ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap/tracee-json.so; \
-	else \
-		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/wiretap; \
-		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_SHORT)/wiretap; \
+		cp wireshark/build/run/tracee-event.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan; \
+		cp wireshark/build/run/tracee-network-capture.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan; \
+		cp wireshark/build/run/tracee-json.so* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap; \
 	fi
 
 # build and run
