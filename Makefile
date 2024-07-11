@@ -24,26 +24,26 @@ clean:
 # copy only source files to wireshark source tree
 copy-source:
 	@if [ -d "wireshark/plugins/epan/tracee-event" ]; then \
-        cp plugins/epan/common.h wireshark/plugins/epan; \
-        cp plugins/epan/wsjson_extensions.c wireshark/plugins/epan; \
-        cp plugins/epan/tracee-event/internal_defs.c wireshark/plugins/epan/tracee-event; \
-        cp plugins/epan/tracee-event/packet-tracee.c wireshark/plugins/epan/tracee-event; \
-        cp plugins/epan/tracee-event/enrichments.c wireshark/plugins/epan/tracee-event; \
-        cp plugins/epan/tracee-event/wanted_fields.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/common.h wireshark/plugins/epan; \
+		cp plugins/epan/wsjson_extensions.c wireshark/plugins/epan; \
+		cp plugins/epan/tracee-event/internal_defs.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-event/packet-tracee.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-event/enrichments.c wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-event/wanted_fields.c wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/stats.c wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/process_tree.c wireshark/plugins/epan/tracee-event; \
-        cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
+		cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
 		cp plugins/epan/tracee-event/plugin.c wireshark/plugins/epan/tracee-event; \
-        cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
-    else \
-        error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
-    fi
+		cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
+	else \
+		error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
+	fi
 
 	@if [ -d "wireshark/plugins/wiretap/tracee-json" ]; then \
-        cp plugins/wiretap/tracee-json/tracee-json.c wireshark/plugins/wiretap/tracee-json; \
-    else \
-        error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
-    fi
+		cp plugins/wiretap/tracee-json/tracee-json.c wireshark/plugins/wiretap/tracee-json; \
+	else \
+		error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
+	fi
 
 # copy all project files to wireshark source tree
 copy-all:
@@ -52,10 +52,10 @@ copy-all:
 
 build:
 	@if [ -d "wireshark/build" ]; then \
-        ninja -C wireshark/build; \
-    else \
-        error "Build directory doesn't exist, run \"make cmake\" first"; \
-    fi
+		ninja -C wireshark/build; \
+	else \
+		error "Build directory doesn't exist, run \"make cmake\" first"; \
+	fi
 
 # update private configuration profile
 install:
