@@ -87,7 +87,6 @@ struct process_stat_node {
 
 struct process_tree_stats_context {
     GHashTable *process_stat_nodes;
-    GTree *process_tree;
 };
 
 // Hash table mapping from stats tree address to the context of the stats tree.
@@ -113,7 +112,6 @@ static void process_tree_stats_tree_init(stats_tree *st)
     // create the context for this process tree stats window and insert it into the global context hash table
     context = g_new(struct process_tree_stats_context, 1);
     context->process_stat_nodes = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, free_process_stat_node);
-    context->process_tree = process_tree_construct();
     gint64 *key = g_new(gint64, 1);
     *key = (gint64)st;
     g_hash_table_insert(stats_tree_context, key, context);
@@ -175,7 +173,7 @@ static struct process_stat_node *process_tree_stats_tree_add_process(stats_tree 
 
     node = g_new0(struct process_stat_node, 1);
     node->parent_id = parent_node_id;
-    node->name = process_tree_get_node_name(pid, process_tree_get_process(context->process_tree, pid));
+    node->name = process_tree_get_node_name(pid, process_tree_get_process(pid));
     node->id = stats_tree_create_node(st, node->name, parent_node_id, STAT_DT_INT, TRUE);
 
     nodes_key = g_new(int, 1);
@@ -190,7 +188,7 @@ static struct process_stat_node *process_tree_stats_tree_add_process_and_ancesto
     struct process_info *parent;
     struct process_stat_node *parent_node = NULL;
 
-    if ((parent = process_tree_get_parent(context->process_tree, pid)) != NULL)
+    if ((parent = process_tree_get_parent(pid)) != NULL)
         parent_node = process_tree_stats_tree_add_process_and_ancestors(st, context, parent->host_pid);
     
     return process_tree_stats_tree_add_process(st, context, pid, parent_node == NULL ? 0 : parent_node->id);
@@ -324,7 +322,6 @@ static void process_tree_stats_tree_cleanup(stats_tree *st)
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
     g_hash_table_destroy(context->process_stat_nodes);
-    g_tree_destroy(context->process_tree);
     g_hash_table_remove(stats_tree_context, &st);
 }
 
