@@ -288,29 +288,32 @@ static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree*
 }
 
 #if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo,
     epan_dissect_t* edt _U_, const void* p)
 #else
-static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo,
     epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
 #endif
 {
     struct process_tree_stats_context *context;
     struct process_stat_node *node;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    gchar *node_name;
 
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
     if (data->process == NULL || data->process->host_pid == 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    // we only care about signatures with severity of 1 or higher
-    if (!data->is_signature || data->signature_severity < 1)
+    // we only care about signatures
+    if (!data->is_signature || strcmp(data->event_name, "sig_process_execution") == 0)
         return TAP_PACKET_DONT_REDRAW;
     
     node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
-    tick_stat_node(st, data->signature_name, node->id, FALSE);
+
+    node_name = wmem_strdup_printf(pinfo->pool, "(Severity %d): %s", data->signature_severity, data->signature_name);
+    tick_stat_node(st, node_name, node->id, FALSE);
 
     return TAP_PACKET_REDRAW;
 }
@@ -319,7 +322,8 @@ static void process_tree_stats_tree_cleanup(stats_tree *st)
 {
     struct process_tree_stats_context *context;
 
-    DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+    if ((context = g_hash_table_lookup(stats_tree_context, &st)) == NULL)
+        return;
 
     g_hash_table_destroy(context->process_stat_nodes);
     g_hash_table_remove(stats_tree_context, &st);
