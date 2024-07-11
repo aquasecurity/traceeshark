@@ -1,6 +1,40 @@
 # Changelog
 
-## v0.3.0
+## v0.3.1
+
+**Added:**
+
+- Pull request build workflow
+
+- Build worflow step that tests that the plugins are loaded successfully
+
+- Statistics
+  
+  - Process tree with written files
+  
+  - Process tree with network operations
+  
+  - Process tree with signatures
+  
+  - Add process executable and command line to process nodes
+
+**Changed:**
+
+- Process tree
+  
+  - Only paths relevant to the selected filter are displayed
+  
+  - Process fork events are used to determine the parent
+
+**Fixed:**
+
+- Compilation and loading errors on older and newer Wireshark versions
+
+- Stats tree bugfixes
+
+- Makefile fixes on Macos
+
+## v0.3.0 (has issues)
 
 **Added**:
 
@@ -41,7 +75,9 @@
   
   - Event counts
   - Process tree
+
 - Dissection of the new `net_packet_raw` event, which hands off the packet dissection to Wireshark
+
 - Traceeshark logo
 
 **Changed**:
