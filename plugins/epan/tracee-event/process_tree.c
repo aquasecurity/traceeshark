@@ -1,10 +1,5 @@
 #include "tracee.h"
 
-struct process_node {
-    struct process_info *process;
-    gint32 parent_pid;
-};
-
 // map from PID to process info
 wmem_map_t *processes;
 
@@ -72,82 +67,26 @@ void process_tree_update(struct tracee_dissector_data *data)
     }
 }
 
-static void process_tree_construct_cb(gpointer key, gpointer value, gpointer user_data)
+struct process_info *process_tree_get_process(gint32 pid)
 {
-    struct process_node *node, *parent_node;
-    gint32 *pid_key, *ppid_val, ppid;
-    gint32 pid = *(gint32 *)key;
-    struct process_info *process = (struct process_info *)value;
-    GTree *process_tree = (GTree *)user_data;
+    return wmem_map_lookup(processes, &pid);
+}
 
-    // this process already exists in the tree (as a parent of a previously seen process) - update its info
-    if ((node = g_tree_lookup(process_tree, &process->host_pid)) != NULL)
-        node->process = process;
-    // create process node and insert it
-    else {
-        node = g_new0(struct process_node, 1);
-        node->process = process;
-        pid_key = g_new(gint32, 1);
-        *pid_key = pid;
-        g_tree_insert(process_tree, pid_key, node);
-    }
+struct process_info *process_tree_get_parent(gint32 pid)
+{
+    gint32 ppid, *ppid_val;
+    struct process_info *process;
 
     // get effective PPID of this process
     if ((ppid_val = wmem_map_lookup(process_real_parents, &pid)) != NULL)
         ppid = *ppid_val;
-    else
+    else {
+        DISSECTOR_ASSERT((process = wmem_map_lookup(processes, &pid)) != NULL);
         ppid = process->host_ppid;
-    
-    if (ppid == 0) {
-        return;
     }
-
-    node->parent_pid = ppid;
     
-    // the parent is not in the tree yet - insert it
-    if ((parent_node = g_tree_lookup(process_tree, &ppid)) == NULL) {
-        parent_node = g_new0(struct process_node, 1);
-        pid_key = g_new(gint32, 1);
-        *pid_key = ppid;
-        g_tree_insert(process_tree, pid_key, parent_node);
-    }
-}
-
-static gint pid_compare(gconstpointer a, gconstpointer b, gpointer user_data _U_)
-{
-    return *(gint32 *)a - *(gint32 *)b;
-}
-
-GTree *process_tree_construct(void)
-{
-    GTree *process_tree = g_tree_new_full(pid_compare, NULL, g_free, g_free);
-    
-    // iterate through all processes, adding them to the tree
-    wmem_map_foreach(processes, process_tree_construct_cb, process_tree);
-
-    return process_tree;
-}
-
-struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid)
-{
-    struct process_node *node;
-
-    if ((node = g_tree_lookup(process_tree, &pid)) == NULL)
+    if (ppid == 0)
         return NULL;
     
-    return node->process;
-}
-
-struct process_info *process_tree_get_parent(GTree *process_tree, gint32 pid)
-{
-    struct process_node *node, *parent_node;
-
-    if ((node = g_tree_lookup(process_tree, &pid)) == NULL)
-        return NULL;
-    
-    if (node->parent_pid == 0)
-        return NULL;
-    
-    DISSECTOR_ASSERT((parent_node = g_tree_lookup(process_tree, &node->parent_pid)) != NULL);
-    return parent_node->process;
+    return wmem_map_lookup(processes, &ppid);
 }

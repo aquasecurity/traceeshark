@@ -64,9 +64,8 @@ gchar *enrichments_get_security_socket_bind_connect_description(packet_info *pin
 
 void process_tree_init(void);
 void process_tree_update(struct tracee_dissector_data *data);
-GTree *process_tree_construct(void);
-struct process_info *process_tree_get_process(GTree *process_tree, gint32 pid);
-struct process_info *process_tree_get_parent(GTree *process_tree, gint32 pid);
+struct process_info *process_tree_get_process(gint32 pid);
+struct process_info *process_tree_get_parent(gint32 pid);
 
 void register_tracee_enrichments(int proto);
 void register_tracee_statistics(void);
