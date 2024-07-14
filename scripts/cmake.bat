@@ -1,15 +1,15 @@
+@echo off
 setlocal
 
 FOR /F "tokens=*" %%i in ('type .env') do SET %%i
 
-rmdir /S /Q wireshark\plugins\epan\tracee-event
-rmdir /S /Q wireshark\plugins\epan\tracee-network-capture
-rmdir /S /Q wireshark\plugins\wiretap\tracee-json
-del /Q wireshark\plugins\epan\common.h
-del /Q wireshark\plugins\epan\wsjson_extensions.c
-xcopy /Y /E plugins wireshark\plugins\
-copy /Y CMakeListsCustom.txt wireshark
-rmdir /S /Q build
+call make_clean.bat
+robocopy .\ wireshark CMakeListsCustom.txt /COPY:DAT
+robocopy plugins\epan wireshark\plugins\epan common.h /COPY:DAT
+robocopy plugins\epan wireshark\plugins\epan wsjson_extensions.c /COPY:DAT
+robocopy "plugins\epan\tracee-event" "wireshark\plugins\epan\tracee-event" /MIR /COPY:DAT
+robocopy "plugins\epan\tracee-network-capture" "wireshark\plugins\epan\tracee-network-capture" /MIR /COPY:DAT
+robocopy "plugins\wiretap\tracee-json" "wireshark\plugins\wiretap\tracee-json" /MIR /COPY:DAT
 mkdir build
 pushd build
 

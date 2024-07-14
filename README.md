@@ -228,7 +228,7 @@ make cmake
 On Windows:
 
 ```batch
-scripts\make_cmake.bat
+scripts\cmake.bat
 ```
 
 Next, build Wireshark together with the Traceeshark plugins.
@@ -242,7 +242,7 @@ make
 On Windows:
 
 ```batch
-scripts\make.bat
+scripts\build.bat
 ```
 
 The Linux and Mac Makefile has a few extra targets that are useful for development:
@@ -273,7 +273,7 @@ make dist
 On Windows:
 
 ```batch
-scripts\make_dist.bat
+scripts\dist.bat
 ```
 
 The archive will be written to the `dist` directory.
