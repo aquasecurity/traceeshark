@@ -2,15 +2,15 @@ include .env
 export
 
 OS_NAME := $(shell uname -s)
-WS_VERSION_SHORT := $(shell wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+")
+WS_VERSION_SHORT := $(shell if [ -x "wireshark/build/run/wireshark" ]; then wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+"; fi)
 ifeq ($(OS_NAME),Darwin)
 	WS_VERSION_DIR := $(subst .,-,$(WS_VERSION_SHORT))
 else
 	WS_VERSION_DIR := $(WS_VERSION_SHORT)
 endif
 
-# update wireshark source tree and build
-all: copy-source build
+# update Wireshark source tree and build
+all: sync build
 
 clean:
 	@rm -rf wireshark/build
@@ -21,42 +21,18 @@ clean:
 	@rm -f wireshark/plugins/epan/wsjson_extensions.c
 	@rm -rf wireshark/plugins/wiretap/tracee-json
 
-# copy only source files to wireshark source tree
-copy-source:
-	@if [ -d "wireshark/plugins/epan/tracee-event" ]; then \
-		cp plugins/epan/common.h wireshark/plugins/epan; \
-		cp plugins/epan/wsjson_extensions.c wireshark/plugins/epan; \
-		cp plugins/epan/tracee-event/internal_defs.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/packet-tracee.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/enrichments.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/wanted_fields.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/stats.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/process_tree.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/tracee.h wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-event/plugin.c wireshark/plugins/epan/tracee-event; \
-		cp plugins/epan/tracee-network-capture/plugin.c wireshark/plugins/epan/tracee-network-capture; \
-		cp plugins/epan/tracee-network-capture/packet-tracee-network-capture.c wireshark/plugins/epan/tracee-network-capture; \
-	else \
-		error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
+# sync plugin source files into Wireshark source
+sync:
+	@rsync -a CMakeListsCustom.txt wireshark/
+	@rsync -a plugins/ wireshark/plugins/
+
+build: sync
+	@if ! [ -d "wireshark/build" ]; then \
+		echo "Build directory doesn't exist, run \"make cmake\" first"; \
+		exit 1; \
 	fi
 
-	@if [ -d "wireshark/plugins/wiretap/tracee-json" ]; then \
-		cp plugins/wiretap/tracee-json/tracee-json.c wireshark/plugins/wiretap/tracee-json; \
-	else \
-		error "Tracee plugin directory doesn't exist, run \"make cmake\" first"; \
-	fi
-
-# copy all project files to wireshark source tree
-copy-all:
-	@cp -r plugins wireshark/
-	@cp CMakeListsCustom.txt wireshark/
-
-build:
-	@if [ -d "wireshark/build" ]; then \
-		ninja -C wireshark/build; \
-	else \
-		error "Build directory doesn't exist, run \"make cmake\" first"; \
-	fi
+	@ninja -C wireshark/build
 
 # update private configuration profile
 install:
@@ -105,7 +81,7 @@ debug: all install
 	@wireshark/build/run/wireshark --log-level DEBUG
 
 # prepare build directory (needed before building for the first time)
-cmake: clean copy-all
+cmake: clean sync
 	@rm -rf wireshark/build && mkdir wireshark/build
 # Wireshark changed DISABLE_WERROR to ENABLE_WERROR at some point. Use both for compatibility (even though it causes a cmake warning to be thrown)
 ifeq ($(WERROR),y)
