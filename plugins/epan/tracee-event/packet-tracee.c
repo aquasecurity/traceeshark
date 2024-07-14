@@ -1702,6 +1702,7 @@ static gchar *dissect_string_array(tvbuff_t *tvb, proto_tree *tree,
     wmem_array_t *arr;
     int i, len;
     gchar *str = NULL;
+    proto_item *tmp_item;
 
     // change field type to string, as it was registered as FT_NONE
     hf->hfinfo.type = FT_STRINGZ;
@@ -1716,7 +1717,8 @@ static gchar *dissect_string_array(tvbuff_t *tvb, proto_tree *tree,
                 else
                     str = wmem_strdup_printf(wmem_packet_scope(), "%s %s", str, *(gchar **)wmem_array_index(arr, i));
             }
-            proto_tree_add_string_wanted(tree, hf_args_command_line, tvb, 0, 0, str);
+            tmp_item = proto_tree_add_string_wanted(tree, hf_args_command_line, tvb, 0, 0, str);
+            proto_item_set_generated(tmp_item);
         }
     }
 
