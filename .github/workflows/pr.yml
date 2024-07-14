@@ -79,8 +79,8 @@ jobs:
         set WIRESHARK_BASE_DIR=%CD%
         set WIRESHARK_QT6_PREFIX_PATH=$QT_ROOT_DIR
         set WERROR=y
-        call scripts\make_cmake.bat
-        call scripts\make.bat
+        call scripts\cmake.bat
+        call scripts\build.bat
       shell: cmd
     
     - name: Load Plugins Test (Unix)
@@ -92,6 +92,6 @@ jobs:
     - name: Load Plugins Test (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        call scripts\make_install.bat
+        call scripts\install.bat
         python .github/load_plugins.py
       shell: cmd
