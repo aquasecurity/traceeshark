@@ -16,3 +16,6 @@ gui.column.format:
     "Source IP", "%s",
 	"Destination IP", "%d",
 	"Info", "%i"
+
+# Show full name of nodes in stats tree (otherwise process tree command lines are cut because of '/' characters)
+statistics.st_sort_showfullname: TRUE
