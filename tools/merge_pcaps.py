@@ -6,6 +6,10 @@ import sys
 from typing import List, Optional
 
 
+DEFAULT_PCAPS_DIR = '/tmp/tracee/out/pcap'
+DEFAULT_OUTPUT_FILE = 'merged.pcapng'
+
+
 def get_pcap_files(tracee_pcaps_dir: str) -> List[str]:
     pcaps: List[str] = []
     subdirs = os.listdir(tracee_pcaps_dir)
@@ -56,8 +60,8 @@ def main():
     parser = argparse.ArgumentParser(description='Merge Tracee events with PCAPs')
 
     parser.add_argument('-e', '--events', type=str, metavar='FILE', help='Tracee events JSON output (optional)')
-    parser.add_argument('-p', '--pcaps', type=str, default='/tmp/tracee/out/pcap', metavar='DIR', help='Tracee PCAPs output dir')
-    parser.add_argument('-o', '--output', type=str, default='merged.pcapng', metavar='FILE', help='Output file (pcapng format)')
+    parser.add_argument('-p', '--pcaps', type=str, default=DEFAULT_PCAPS_DIR, metavar='DIR', help=f'Tracee PCAPs output dir (default is {DEFAULT_PCAPS_DIR})')
+    parser.add_argument('-o', '--output', type=str, default=DEFAULT_OUTPUT_FILE, metavar='FILE', help=f'Output file in PcapNG format (default is {DEFAULT_OUTPUT_FILE})')
 
     args = parser.parse_args()
 
