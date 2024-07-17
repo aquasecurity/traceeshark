@@ -434,6 +434,11 @@ class DataOutputManager:
     def write_event(self, event: bytes):
         ts = self._parse_ts(event)
 
+        # Protection against negative timestamp bug in older Tracee version,
+        # which causes the pcapng block write to fail
+        if ts < 0:
+            ts = 0
+
         with self._lock:
             epb = self._writer.current_section.new_member(
                 pcapng.blocks.EnhancedPacket,
