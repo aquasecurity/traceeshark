@@ -33,6 +33,9 @@ else:
 os.makedirs(TMP_DIR, exist_ok=True)
 
 EXTCAP_VERSION = 'VERSION_PLACEHOLDER'
+EXTCAP_DISPLAY = 'Tracee'
+INTERFACE_NAME = 'tracee'
+INTERFACE_DISPLAY = 'Tracee capture'
 DLT_USER0 = 147
 TRACEE_OUTPUT_BUF_CAPACITY = 262144 # enough to hold the largest event encountered so far
 DATA_PORT = 4000
@@ -53,6 +56,7 @@ DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-rel
 DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
 DEFAULT_OUTPUT_DIR = os.path.join(TMP_DIR, 'tracee_output')
+DEFAULT_PRESET = 'Default'
 DEFAULT_SNAPLEN = 'default'
 
 # corresponds to "enum InterfaceControlCommand" from wireshark/ui/qt/interface_toolbar.cpp
@@ -88,8 +92,8 @@ def show_version():
 
 
 def show_interfaces():
-    print("extcap {version=%s}{help=https://www.wireshark.org}{display=Tracee}" % EXTCAP_VERSION)
-    print("interface {value=tracee}{display=Tracee capture}")
+    print("extcap {version=%s}{help=https://www.wireshark.org}{display=%s}" % (EXTCAP_VERSION, EXTCAP_DISPLAY))
+    print("interface {value=%s}{display=%s}" % (INTERFACE_NAME, INTERFACE_DISPLAY))
     print("control {number=%d}{type=button}{display=Stop}{tooltip=Stop the capture}" % CTRL_ARG_STOP)
     print("control {number=%d}{type=boolean}{display=Copy output on stop}{default=true}{tooltip=Copy output folder when stopping the capture}" % CTRL_ARG_COPY_ON_STOP)
     print("control {number=%d}{type=button}{display=Copy output}{tooltip=Copy output folder from remote}" % CTRL_ARG_COPY_OUTPUT)
@@ -400,7 +404,7 @@ def show_config(reload_option: Optional[str]):
     if reload_option is None or reload_option == 'preset':
         values.append(ConfigVal(arg=id_preset, value='none', display=f'No preset', default='false'))
         for preset in presets:
-            values.append(ConfigVal(arg=id_preset, value=preset, display=preset, default='true' if preset == 'Default' else 'false'))
+            values.append(ConfigVal(arg=id_preset, value=preset, display=preset, default='true' if preset == DEFAULT_PRESET else 'false'))
 
     if reload_option is None:
         for arg in args:
@@ -1238,7 +1242,7 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+def main_wrapper():
     #sys.stderr.write(f'{sys.argv}\n')
     #sys.stderr.flush()
     
@@ -1253,3 +1257,7 @@ if __name__ == '__main__':
         exception(ex)
     finally:
         sys.stderr.flush()
+
+
+if __name__ == '__main__':
+    main_wrapper()
