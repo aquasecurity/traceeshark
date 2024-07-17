@@ -32,7 +32,8 @@ enum field_type {
     FIELD_TYPE_INT64,
     FIELD_TYPE_UINT64,
     FIELD_TYPE_STRING,
-    FIELD_TYPE_BOOLEAN
+    FIELD_TYPE_BOOLEAN,
+    FIELD_TYPE_DOUBLE,
 };
 
 struct field_value {
@@ -44,6 +45,7 @@ struct field_value {
         guint64 val_uint64;
         gchar *val_string;
         gboolean val_boolean;
+        double val_double;
     } val;
 };
 
@@ -59,6 +61,7 @@ proto_item *proto_tree_add_int64_wanted(proto_tree *tree, int hfindex, tvbuff_t 
 proto_item *proto_tree_add_uint64_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint64 value);
 proto_item *proto_tree_add_string_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, const char* value);
 proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
+proto_item *proto_tree_add_double_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, double value);
 
 gchar *enrichments_get_security_socket_bind_connect_description(packet_info *pinfo, const gchar *verb);
 

@@ -139,3 +139,9 @@ proto_item *proto_tree_add_boolean_wanted(proto_tree *tree, int hfindex, tvbuff_
     handle_wanted_field(hfindex, value, FIELD_TYPE_BOOLEAN, val_boolean);
     return proto_tree_add_boolean(tree, hfindex, tvb, start, length, value);
 }
+
+proto_item *proto_tree_add_double_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, double value)
+{
+    handle_wanted_field(hfindex, value, FIELD_TYPE_DOUBLE, val_double);
+    return proto_tree_add_double(tree, hfindex, tvb, start, length, value);
+}
