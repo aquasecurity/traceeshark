@@ -217,6 +217,7 @@ static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
 static gint ett_args = -1;
 static gint ett_string_arr = -1;
+static gint ett_int_arr = -1;
 static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
 static gint ett_triggered_by = -1;
@@ -246,6 +247,12 @@ struct event_dynamic_hf {
  * the same for each event type.
  */
 static wmem_map_t *event_dynamic_hf_map;
+
+/**
+ * This map serves as a set of all of Tracee's string types.
+ * Most of these are syscall fields with a string representing a memory address.
+ */
+static wmem_map_t *string_types;
 
 /**
  * This map contains dissector functions for known complex argument types.
@@ -561,14 +568,7 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     info->format_cb = NULL;
 
     // string
-    if (strcmp(type, "const char *")        == 0 ||
-        strcmp(type, "const char*")         == 0 ||
-        strcmp(type, "string")              == 0 ||
-        strcmp(type, "char*")               == 0 ||
-        strcmp(type, "bytes")               == 0 ||
-        strcmp(type, "void*")               == 0 ||
-        strcmp(type, "int*")                == 0) {
-        
+    if (wmem_map_contains(string_types, type)) {
         info->type = FT_STRINGZ;
         info->display = BASE_NONE;
     }
@@ -595,7 +595,8 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
 
     // s32
     else if (strcmp(type, "int")    == 0 ||
-             strcmp(type, "pid_t")  == 0) {
+             strcmp(type, "pid_t")  == 0 ||
+             strcmp(type, "const clockid_t") == 0) {
         
         info->type = FT_INT32;
         info->display = BASE_DEC;
@@ -629,6 +630,12 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
         
         info->type = FT_UINT64;
         info->display = BASE_DEC;
+    }
+
+    // double
+    else if (strcmp(type, "struct timespec*") == 0) {
+        info->type = FT_DOUBLE;
+        info->display = BASE_NONE;
     }
 
     // other types
@@ -749,6 +756,38 @@ static void do_dissect_string_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_
     }
 }
 
+static void do_dissect_int_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_id,
+    const gchar *arr_name, gchar *json_data, jsmntok_t *arr_tok, wmem_array_t *arr_data)
+{
+    int i, arr_len, val;
+    jsmntok_t *elem_tok;
+    proto_item *tmp_item;
+
+    // get array length
+    DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
+
+    // iterate through all elements
+    for (i = 0; i < arr_len; i++) {
+        // get element
+        DISSECTOR_ASSERT((elem_tok = json_get_array_index(arr_tok, i)) != NULL);
+        
+        // make sure it's an int
+        DISSECTOR_ASSERT(elem_tok->type == JSMN_PRIMITIVE);
+
+        // get the value
+        json_data[elem_tok->end] = '\0';
+        errno = 0;
+        val = (gint32)strtoll(&json_data[elem_tok->start], NULL, 10);
+        DISSECTOR_ASSERT(errno == 0);
+        if (arr_data != NULL)
+            wmem_array_append_one(arr_data, val);
+
+        // add the value to the dissection tree
+        tmp_item = proto_tree_add_int_wanted(arr_tree, hf_id, tvb, 0, 0, val);
+        proto_item_set_text(tmp_item, "%s[%d]: %s", arr_name, i, proto_item_get_display_repr(wmem_packet_scope(), tmp_item));
+    }
+}
+
 static wmem_array_t *add_string_array(tvbuff_t *tvb, proto_tree *tree, int hf_id, const gchar *item_name,
     const gchar *arr_name, gchar *json_data, jsmntok_t *parent_tok, const gchar *arr_tok_name, gboolean get_data)
 {
@@ -784,6 +823,45 @@ static wmem_array_t *add_string_array(tvbuff_t *tvb, proto_tree *tree, int hf_id
         arr_data = wmem_array_sized_new(wmem_packet_scope(), sizeof(gchar *), arr_len);
 
     do_dissect_string_array(tvb, arr_tree, hf_id, arr_name, json_data, arr_tok, arr_data);
+
+    return arr_data;
+}
+
+static wmem_array_t *add_int_array(tvbuff_t *tvb, proto_tree *tree, int hf_id, const gchar *item_name,
+    const gchar *arr_name, gchar *json_data, jsmntok_t *parent_tok, const gchar *arr_tok_name, gboolean get_data)
+{
+    proto_item *arr_item;
+    proto_tree *arr_tree;
+    jsmntok_t *arr_tok;
+    int arr_len;
+    wmem_array_t *arr_data = NULL;
+
+    // create the item
+    arr_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(arr_item, "%s", item_name);
+
+    // get array
+    if ((arr_tok = json_get_array(json_data, parent_tok, arr_tok_name)) != NULL) {
+        DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
+        proto_item_append_text(arr_item, ": %d item%s", arr_len, arr_len == 1 ? "" : "s");
+    }
+    // not an array - try getting a null
+    else if (json_get_null(json_data, parent_tok, arr_tok_name)) {
+        proto_item_append_text(arr_item, ": (null)");
+        return NULL;
+    }
+    else {
+        proto_item_set_hidden(arr_item);
+        return NULL;
+    }
+    
+    // create the subtree
+    arr_tree = proto_item_add_subtree(arr_item, ett_int_arr);
+    
+    if (get_data)
+        arr_data = wmem_array_sized_new(wmem_packet_scope(), sizeof(int), arr_len);
+
+    do_dissect_int_array(tvb, arr_tree, hf_id, arr_name, json_data, arr_tok, arr_data);
 
     return arr_data;
 }
@@ -867,7 +945,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // add sa_family
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "sa_family")) != NULL);
     proto_tree_add_string_wanted(tree, hf_sockaddr_sa_family, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "sa_family = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "sa_family = %s", tmp_str);
     if (strcmp(tmp_str, "AF_INET") == 0)
         add_network_filter(tvb, tree, "ip");
     else if (strcmp(tmp_str, "AF_INET6") == 0)
@@ -876,13 +954,13 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // add sun_path
     if ((tmp_str = json_get_string(json_data, obj_tok, "sun_path")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sun_path, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sun_path = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sun_path = %s", arg_str, tmp_str);
     }
     
     // add sin_addr
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin_addr")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin_addr, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin_addr = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin_addr = %s", arg_str, tmp_str);
         DISSECTOR_ASSERT(ws_inet_pton4(tmp_str, &in4_addr));
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
         proto_item_set_hidden(tmp_item);
@@ -899,7 +977,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // get sin_port
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin_port")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin_port, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin_port = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin_port = %s", arg_str, tmp_str);
         errno = 0;
         port = (guint32)strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
@@ -908,7 +986,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // add sin6_addr
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_addr")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin6_addr, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_addr = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin6_addr = %s", arg_str, tmp_str);
         if (ws_inet_pton6(tmp_str, &in6_addr)) {
             tmp_item = proto_tree_add_ipv6(tree, hf_ipv6_addr, tvb, 0, 0, &in6_addr);
             proto_item_set_hidden(tmp_item);
@@ -929,7 +1007,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // get sin6_port
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_port")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin6_port, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_port = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin6_port = %s", arg_str, tmp_str);
         errno = 0;
         port = (guint32)strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
@@ -956,12 +1034,12 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     // add sin6_flowinfo
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_flowinfo")) != NULL) {
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin6_flowinfo, tvb, 0, 0, tmp_str);
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_flowinfo = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin6_flowinfo = %s", arg_str, tmp_str);
     }
     
     // add sin6_scopeid
     if ((tmp_str = json_get_string(json_data, obj_tok, "sin6_scopeid")) != NULL) {
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, sin6_scopeid = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, sin6_scopeid = %s", arg_str, tmp_str);
         proto_tree_add_string_wanted(tree, hf_sockaddr_sin6_scopeid, tvb, 0, 0, tmp_str);
     }
 
@@ -1047,7 +1125,7 @@ static gchar *do_dissect_pktmeta(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add src ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "src_ip")) != NULL);
     proto_tree_add_string_wanted(tree, hf_pktmeta_src_ip, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "src_ip = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "src_ip = %s", tmp_str);
     if (ws_inet_pton4(tmp_str, &in4_addr)) {
         add_network_filter(tvb, tree, "ip");
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
@@ -1068,7 +1146,7 @@ static gchar *do_dissect_pktmeta(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add dst ip
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "dst_ip")) != NULL);
     proto_tree_add_string_wanted(tree, hf_pktmeta_dst_ip, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, dst_ip = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, dst_ip = %s", arg_str, tmp_str);
     if (ws_inet_pton4(tmp_str, &in4_addr)) {
         tmp_item = proto_tree_add_ipv4(tree, hf_ip_addr, tvb, 0, 0, in4_addr);
         proto_item_set_hidden(tmp_item);
@@ -1089,18 +1167,18 @@ static gchar *do_dissect_pktmeta(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "src_port", &tmp_int));
     src_port = (guint32)tmp_int;
     proto_tree_add_uint_wanted(tree, hf_pktmeta_src_port, tvb, 0, 0, src_port);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, src_port = %u", arg_str, src_port);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, src_port = %u", arg_str, src_port);
 
     // add dst port
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "dst_port", &tmp_int));
     dst_port = (guint32)tmp_int;
     proto_tree_add_uint_wanted(tree, hf_pktmeta_dst_port, tvb, 0, 0, dst_port);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, dst_port = %u", arg_str, dst_port);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, dst_port = %u", arg_str, dst_port);
 
     // add protocol
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "protocol", &tmp_int));
     proto_tree_add_uint_wanted(tree, hf_pktmeta_protocol, tvb, 0, 0, (guint32)tmp_int);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, ipproto = %u", arg_str, (guint32)tmp_int);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, ipproto = %u", arg_str, (guint32)tmp_int);
     tmp_item = proto_tree_add_uint(tree, hf_ip_proto, tvb, 0, 0, (guint8)tmp_int);
     proto_item_set_hidden(tmp_item);
     if (tmp_int == IP_PROTO_TCP) {
@@ -1137,17 +1215,17 @@ static gchar *do_dissect_pktmeta(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add packet len
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "packet_len", &tmp_int));
     proto_tree_add_uint_wanted(tree, hf_pktmeta_packet_len, tvb, 0, 0, (guint32)tmp_int);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, len = %u", arg_str, (guint32)tmp_int);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, len = %u", arg_str, (guint32)tmp_int);
 
     // add iface
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "iface")) != NULL);
     proto_tree_add_string_wanted(tree, hf_pktmeta_iface, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, iface = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, iface = %s", arg_str, tmp_str);
 
     return arg_str;
 }
 
-static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     gchar *arg_str, *tmp_str;
     proto_item *tmp_item;
@@ -1159,17 +1237,17 @@ static gchar *do_dissect_dns_query_data(tvbuff_t *tvb, packet_info *pinfo _U_, p
     proto_tree_add_string_wanted(tree, hf_dnsquery_query, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, hf_dns_qry_name, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "query = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "query = %s", tmp_str);
 
     // add type
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_type")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_type, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, type = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, type = %s", arg_str, tmp_str);
 
     // add class
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "query_class")) != NULL);
     proto_tree_add_string_wanted(tree, hf_dnsquery_class, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, class = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, class = %s", arg_str, tmp_str);
 
     return arg_str;
 }
@@ -1235,7 +1313,7 @@ static gchar *do_dissect_dns_response_data(tvbuff_t *tvb, packet_info *pinfo, pr
     return NULL;
 }
 
-static gchar *dissect_http_headers(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, gchar *json_data, jsmntok_t *headers_tok)
+static gchar *dissect_http_headers(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *headers_tok)
 {
     proto_item *headers_item, *tmp_item;
     proto_tree *headers_tree;
@@ -1271,13 +1349,13 @@ static gchar *dissect_http_headers(tvbuff_t *tvb, packet_info *pinfo _U_, proto_
             DISSECTOR_ASSERT(json_decode_string_inplace(header_value));
 
             // add header value to dissection
-            tmp_str = wmem_strdup_printf(wmem_packet_scope(), "%s: %s", header_name, header_value);
+            tmp_str = wmem_strdup_printf(pinfo->pool, "%s: %s", header_name, header_value);
             tmp_item = proto_tree_add_string_wanted(headers_tree, hf_proto_http_request_header, tvb, 0, 0, tmp_str);
             proto_item_set_text(tmp_item, "%s", tmp_str);
             if (headers_str == NULL)
-                headers_str = wmem_strdup(wmem_packet_scope(), tmp_str);
+                headers_str = wmem_strdup(pinfo->pool, tmp_str);
             else
-                headers_str = wmem_strdup_printf(wmem_packet_scope(), "%s, %s", headers_str, tmp_str);
+                headers_str = wmem_strdup_printf(pinfo->pool, "%s, %s", headers_str, tmp_str);
             
             // add header value to relevant http fields
             header_hf = -1;
@@ -1310,7 +1388,7 @@ static gchar *dissect_http_headers(tvbuff_t *tvb, packet_info *pinfo _U_, proto_
             }
 
             // add as request line, append "\r\n" to the end for compliance with the HTTP dissector's format
-            tmp_str = wmem_strdup_printf(wmem_packet_scope(), "%s\r\n", tmp_str);
+            tmp_str = wmem_strdup_printf(pinfo->pool, "%s\r\n", tmp_str);
             tmp_item = proto_tree_add_string(headers_tree, hf_http_request_line, tvb, 0, 0, tmp_str);
             proto_item_set_hidden(tmp_item);
         }
@@ -1335,46 +1413,46 @@ static gchar *do_dissect_proto_http_request(tvbuff_t *tvb, packet_info *pinfo, p
     proto_tree_add_string_wanted(tree, hf_proto_http_request_method, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, hf_http_request_method, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "method = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "method = %s", tmp_str);
 
     // add protocol
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "protocol")) != NULL);
     proto_tree_add_string_wanted(tree, hf_proto_http_request_protocol, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, hf_http_request_version, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, protocol = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, protocol = %s", arg_str, tmp_str);
 
     // add host
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "host")) != NULL);
     proto_tree_add_string_wanted(tree, hf_proto_http_request_host, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, hf_http_host, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, host = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, host = %s", arg_str, tmp_str);
 
     // add URI path
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "uri_path")) != NULL);
     proto_tree_add_string_wanted(tree, hf_proto_http_request_uri_path, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, hf_http_request_uri, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, URI = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, URI = %s", arg_str, tmp_str);
 
     // add headers
     DISSECTOR_ASSERT((headers_tok = json_get_object(json_data, obj_tok, "headers")) != NULL);
     headers_str = dissect_http_headers(tvb, pinfo, tree, json_data, headers_tok);
     if (headers_str != NULL)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, headers = [%s]", arg_str, headers_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, headers = [%s]", arg_str, headers_str);
     
     // add content length
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "content_length", &tmp_int));
     proto_tree_add_int64_wanted(tree, hf_proto_http_request_content_length, tvb, 0, 0, tmp_int);
     tmp_item = proto_tree_add_uint64(tree, hf_http_content_length, tvb, 0, 0, (guint64)tmp_int);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, content_length = %" PRId64, arg_str, tmp_int);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, content_length = %" PRId64, arg_str, tmp_int);
 
     return arg_str;
 }
 
-static gchar *do_dissect_packet_metadata(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static gchar *do_dissect_packet_metadata(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     gint64 tmp_int;
     const gchar *tmp_str;
@@ -1384,12 +1462,12 @@ static gchar *do_dissect_packet_metadata(tvbuff_t *tvb, packet_info *pinfo _U_, 
     proto_tree_add_int_wanted(tree, hf_packet_metadata_direction, tvb, 0, 0, (gint32)tmp_int);
     tmp_str = try_val_to_str((guint32)tmp_int, packet_metadata_directions);
     if (tmp_str != NULL)
-        return wmem_strdup_printf(wmem_packet_scope(), "direction = %s", tmp_str);
+        return wmem_strdup_printf(pinfo->pool, "direction = %s", tmp_str);
     else
-        return wmem_strdup_printf(wmem_packet_scope(), "direction = %d", (gint32)tmp_int);
+        return wmem_strdup_printf(pinfo->pool, "direction = %d", (gint32)tmp_int);
 }
 
-static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     gchar *arg_str, *status_desc, *headers_str, *tmp_str;
     gboolean request;
@@ -1402,7 +1480,7 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
     // add direction
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "direction")) != NULL);
     proto_tree_add_string_wanted(tree, hf_proto_http_direction, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "direction = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "direction = %s", tmp_str);
     if (strcmp(tmp_str, "request") == 0)
         request = TRUE;
     else {
@@ -1420,14 +1498,14 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
         proto_item_set_hidden(tmp_item);
     }
     if (strlen(tmp_str) > 0)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, method = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, method = %s", arg_str, tmp_str);
 
     // add protocol
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "protocol")) != NULL);
     proto_tree_add_string_wanted(tree, hf_proto_http_protocol, tvb, 0, 0, tmp_str);
     tmp_item = proto_tree_add_string(tree, request ? hf_http_request_version : hf_http_response_version, tvb, 0, 0, tmp_str);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, protocol = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, protocol = %s", arg_str, tmp_str);
 
     // add host
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "host")) != NULL);
@@ -1437,7 +1515,7 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
         proto_item_set_hidden(tmp_item);
     }
     if (strlen(tmp_str) > 0)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, host = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, host = %s", arg_str, tmp_str);
 
     // add URI path
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "uri_path")) != NULL);
@@ -1447,7 +1525,7 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
         proto_item_set_hidden(tmp_item);
     }
     if (strlen(tmp_str) > 0)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, URI = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, URI = %s", arg_str, tmp_str);
 
     // add status
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "status")) != NULL);
@@ -1463,7 +1541,7 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
         }
     }
     if (strlen(tmp_str) > 0)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, status = %s", arg_str, tmp_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, status = %s", arg_str, tmp_str);
     
     // add status code
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "status_code", &tmp_int));
@@ -1477,31 +1555,31 @@ static gchar *do_dissect_proto_http(tvbuff_t *tvb, packet_info *pinfo _U_, proto
     DISSECTOR_ASSERT((headers_tok = json_get_object(json_data, obj_tok, "headers")) != NULL);
     headers_str = dissect_http_headers(tvb, pinfo, tree, json_data, headers_tok);
     if (headers_str != NULL)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, headers = [%s]", arg_str, headers_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s, headers = [%s]", arg_str, headers_str);
     
     // add content length
     DISSECTOR_ASSERT(json_get_int(json_data, obj_tok, "content_length", &tmp_int));
     proto_tree_add_int64_wanted(tree, hf_proto_http_content_length, tvb, 0, 0, tmp_int);
     tmp_item = proto_tree_add_uint64(tree, hf_http_content_length, tvb, 0, 0, (guint64)tmp_int);
     proto_item_set_hidden(tmp_item);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, content_length = %" PRId64, arg_str, tmp_int);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, content_length = %" PRId64, arg_str, tmp_int);
 
     return arg_str;
 }
 
-static gchar *do_dissect_hooked_symbol_data(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
+static gchar *do_dissect_hooked_symbol_data(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *obj_tok)
 {
     gchar *tmp_str, *arg_str;
 
     // add symbol name
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "SymbolName")) != NULL);
     proto_tree_add_string_wanted(tree, hf_hooked_symbol_name, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "SymbolName = %s", tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "SymbolName = %s", tmp_str);
 
     // add module owner
     DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, obj_tok, "ModuleOwner")) != NULL);
     proto_tree_add_string_wanted(tree, hf_hooked_symbol_module_owner, tvb, 0, 0, tmp_str);
-    arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, ModuleOwner = %s", arg_str, tmp_str);
+    arg_str = wmem_strdup_printf(pinfo->pool, "%s, ModuleOwner = %s", arg_str, tmp_str);
 
     return arg_str;
 }
@@ -1532,7 +1610,7 @@ static gchar *dissect_object_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // wrap arg str in brackets
     if (arg_str != NULL)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "{%s}", arg_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "{%s}", arg_str);
     
     return arg_str;
 }
@@ -1571,15 +1649,15 @@ static gchar *dissect_object_array_arg(tvbuff_t *tvb, packet_info *pinfo, proto_
         if (arg_str != NULL) {
             // array str not initialized yet
             if (arg_arr_str == NULL)
-                arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "[{%s}", arg_str);
+                arg_arr_str = wmem_strdup_printf(pinfo->pool, "[{%s}", arg_str);
             else
-                arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "%s, {%s}", arg_arr_str, arg_str);
+                arg_arr_str = wmem_strdup_printf(pinfo->pool, "%s, {%s}", arg_arr_str, arg_str);
         }
     }
     
     // finalize array str
     if (arg_arr_str != NULL)
-        arg_arr_str = wmem_strdup_printf(wmem_packet_scope(), "%s]", arg_arr_str);
+        arg_arr_str = wmem_strdup_printf(pinfo->pool, "%s]", arg_arr_str);
     
     return arg_arr_str;
 }
@@ -1754,11 +1832,11 @@ static gchar *dissect_unknown_arg(tvbuff_t *tvb, packet_info *pinfo _U_,
     return arg_str;
 }
 
-static gchar *dissect_string_array(tvbuff_t *tvb, packet_info *pinfo _U_,
+static gchar *dissect_string_array(tvbuff_t *tvb, packet_info *pinfo,
     proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
 {
     wmem_array_t *arr;
-    int i, len;
+    unsigned int i;
     gchar *str = NULL;
     proto_item *tmp_item;
 
@@ -1767,18 +1845,41 @@ static gchar *dissect_string_array(tvbuff_t *tvb, packet_info *pinfo _U_,
 
     if ((arr = add_string_array(tvb, tree, *(hf->p_id), hf->hfinfo.name, hf->hfinfo.name, json_data, arg_tok, "value", TRUE)) != NULL) {
         // argv array - add a field that displays all arguments together
-        len = wmem_array_get_count(arr);
         if (strcmp(hf->hfinfo.name, "argv") == 0) {
-            for (i = 0; i < len; i++) {
+            for (i = 0; i < wmem_array_get_count(arr); i++) {
                 if (str == NULL)
-                    str = wmem_strdup(wmem_packet_scope(), *(gchar **)wmem_array_index(arr, i));
+                    str = wmem_strdup(pinfo->pool, *(gchar **)wmem_array_index(arr, i));
                 else
-                    str = wmem_strdup_printf(wmem_packet_scope(), "%s %s", str, *(gchar **)wmem_array_index(arr, i));
+                    str = wmem_strdup_printf(pinfo->pool, "%s %s", str, *(gchar **)wmem_array_index(arr, i));
             }
             tmp_item = proto_tree_add_string_wanted(tree, hf_args_command_line, tvb, 0, 0, str);
             proto_item_set_generated(tmp_item);
         }
     }
+
+    return str;
+}
+
+static gchar *dissect_int_array(tvbuff_t *tvb, packet_info *pinfo,
+    proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    wmem_array_t *arr;
+    unsigned int i;
+    gchar *str = NULL;
+
+    // change field type to int, as it was registered as FT_NONE
+    hf->hfinfo.type = FT_INT32;
+
+    if ((arr = add_int_array(tvb, tree, *(hf->p_id), hf->hfinfo.name, hf->hfinfo.name, json_data, arg_tok, "value", TRUE)) != NULL) {
+        for (i = 0; i < wmem_array_get_count(arr); i++) {
+            if (str == NULL)
+                str = wmem_strdup_printf(pinfo->pool, "%d", *(int *)wmem_array_index(arr, i));
+            else
+                str = wmem_strdup_printf(pinfo->pool, "%s, %d", str, *(int *)wmem_array_index(arr, i));
+        }
+    }
+
+    str = wmem_strdup_printf(pinfo->pool, "[%s]", str == NULL ? "" : str);
 
     return str;
 }
@@ -1869,15 +1970,15 @@ static gchar *dissect_hooked_symbol_data_map(tvbuff_t *tvb, packet_info *pinfo,
         // add entry str to argument str
         if (symbol_data_str != NULL) {
             if (arg_str != NULL)
-                arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s, %s: {%s}", arg_str, entry_name, symbol_data_str);
+                arg_str = wmem_strdup_printf(pinfo->pool, "%s, %s: {%s}", arg_str, entry_name, symbol_data_str);
             else
-                arg_str = wmem_strdup_printf(wmem_packet_scope(), "{%s: {%s}", entry_name, symbol_data_str);
+                arg_str = wmem_strdup_printf(pinfo->pool, "{%s: {%s}", entry_name, symbol_data_str);
         }
     }
 
     // finalize argument str
     if (arg_str != NULL)
-        arg_str = wmem_strdup_printf(wmem_packet_scope(), "%s}", arg_str);
+        arg_str = wmem_strdup_printf(pinfo->pool, "%s}", arg_str);
 
     proto_item_append_text(symbols_item, ": %d item%s", i, i == 1 ? "" : "s");
 
@@ -1928,7 +2029,7 @@ static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // add args
     dissect_arguments(tvb, pinfo, triggered_by_tree, json_data, triggered_by_tok,
-        wmem_strdup_printf(wmem_packet_scope(), "%s.triggered_by", event_name), FALSE, data);
+        wmem_strdup_printf(pinfo->pool, "%s.triggered_by", event_name), FALSE, data);
 }
 
 /**
@@ -1960,6 +2061,7 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     gchar *arg_type, *arg_str;
     gint64 tmp_int;
     bool tmp_bool;
+    double tmp_double;
     complex_arg_dissector_t dissector;
     proto_item *tmp_item;
     const gchar *info_col;
@@ -2034,6 +2136,13 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
                     arg_str = wmem_strdup_printf(pinfo->pool, "%s", tmp_bool ? "true" : "false");
                     break;
                 
+                // double
+                case FT_DOUBLE:
+                    DISSECTOR_ASSERT(json_get_double(json_data, curr_arg, "value", &tmp_double));
+                    proto_tree_add_double_wanted(args_tree, *(hf->p_id), tvb, 0, 0, tmp_double);
+                    arg_str = wmem_strdup_printf(pinfo->pool, "%f", tmp_double);
+                    break;
+                
                 // string
                 case FT_STRINGZ:
                     // try reading a string
@@ -2066,8 +2175,8 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
                 
                 // unsupported or unknown types
                 case FT_NONE:
-                    ws_info("cannot dissect arg \"%s\" of unsupported type \"%s\"",
-                        hf->hfinfo.name, arg_type);
+                    ws_info("cannot dissect arg \"%s\" of unsupported type \"%s\" in event \"%s\"",
+                        hf->hfinfo.name, arg_type, event_name);
                     tmp_item = proto_tree_add_item(args_tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
                     proto_item_append_text(tmp_item, " (unsupported type \"%s\")", arg_type);
                     break;
@@ -2278,6 +2387,53 @@ static int dissect_tracee_json(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     return tvb_captured_length(tvb);
 }
 
+static void add_string_type(const gchar *type) {
+    wmem_map_insert(string_types, type, NULL);
+}
+
+static void init_string_types(void) {
+    string_types = wmem_map_new(wmem_epan_scope(), g_str_hash, g_str_equal);
+
+    add_string_type("const char *");
+    add_string_type("const char*");
+    add_string_type("string");
+    add_string_type("char*");
+    add_string_type("bytes");
+    add_string_type("void*");
+    add_string_type("int*");
+    add_string_type("struct epoll_event*");
+    add_string_type("const sigset_t*");
+    add_string_type("const struct timespec*");
+    add_string_type("struct statx*");
+    add_string_type("struct pollfd*");
+    add_string_type("struct itimerval*");
+    add_string_type("struct msghdr*");
+    add_string_type("const struct iovec*");
+    add_string_type("const struct itimerspec*");
+    add_string_type("struct itimerspec*");
+    add_string_type("struct stat*");
+    add_string_type("fd_set*");
+    add_string_type("sigset_t*");
+    add_string_type("const void*");
+    add_string_type("struct mmsghdr*");
+    add_string_type("struct timex*");
+    add_string_type("struct robust_list_head*");
+    add_string_type("const struct sigaction*");
+    add_string_type("struct sigaction*");
+    add_string_type("struct rseq*");
+    add_string_type("const struct rlimit64*");
+    add_string_type("struct rlimit64*");
+    add_string_type("struct linux_dirent64*");
+    add_string_type("const stack_t*");
+    add_string_type("stack_t*");
+    add_string_type("struct statfs*");
+    add_string_type("struct rusage*");
+    add_string_type("struct sysinfo*");
+    add_string_type("struct utsname*");
+    add_string_type("struct clone_args*");
+    add_string_type("unsigned long*");
+}
+
 static void add_supported_type(const gchar *type, complex_arg_dissector_t dissector)
 {
     wmem_map_insert(complex_type_dissectors, wmem_strdup(wmem_epan_scope(), type), dissector);
@@ -2306,58 +2462,26 @@ static void init_complex_types(void) {
     add_supported_type("map[string]trace.HookedSymbolData", dissect_hooked_symbol_data_map);
     add_supported_type("[]trace.HookedSymbolData", dissect_hooked_symbol_data_arr);
     add_supported_type("[]trace.DnsResponseData", dissect_dns_response_data);
+    add_supported_type("int[2]", dissect_int_array);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
     add_unsupported_type("trace.ProtoTCP");
     add_unsupported_type("trace.ProtoUDP");
     add_unsupported_type("struct file_operations *");
-    add_unsupported_type("const struct iovec*");
     add_unsupported_type("trace.ProtoDNS");
-    add_unsupported_type("struct stat*");
-    add_unsupported_type("const struct timespec*");
-    add_unsupported_type("struct utsname*");
-    add_unsupported_type("struct rusage*");
     add_unsupported_type("struct linux_dirent*");
-    add_unsupported_type("struct statfs*");
-    add_unsupported_type("struct sysinfo*");
-    add_unsupported_type("const struct sigaction*");
-    add_unsupported_type("struct sigaction*");
-    add_unsupported_type("struct robust_list_head*");
-    add_unsupported_type("sigset_t*");
     add_unsupported_type("struct rlimit*");
-    add_unsupported_type("fd_set*");
-    add_unsupported_type("struct epoll_event*");
-    add_unsupported_type("struct timespec*");
-    add_unsupported_type("const sigset_t*");
-    add_unsupported_type("struct msghdr*");
-    add_unsupported_type("struct pollfd*");
-    add_unsupported_type("const struct itimerspec*");
-    add_unsupported_type("struct statx*");
-    add_unsupported_type("const stack_t*");
-    add_unsupported_type("struct itimerspec*");
-    add_unsupported_type("struct itimerval*");
     add_unsupported_type("union bpf_attr*");
     add_unsupported_type("struct perf_event_attr*");
-    add_unsupported_type("stack_t*");
     add_unsupported_type("cap_user_header_t");
     add_unsupported_type("const cap_user_data_t");
-    add_unsupported_type("const clockid_t");
     add_unsupported_type("cap_user_data_t");
-    add_unsupported_type("const struct rlimit64*");
-    add_unsupported_type("struct rseq*");
-    add_unsupported_type("int[2]");
-    add_unsupported_type("struct linux_dirent64*");
-    add_unsupported_type("struct rlimit64*");
-    add_unsupported_type("struct timex*");
-    add_unsupported_type("const void*");
     add_unsupported_type("trace.ProtoICMP");
     add_unsupported_type("struct timeval*");
     add_unsupported_type("struct siginfo*");
     add_unsupported_type("gid_t*");
-    add_unsupported_type("struct clone_args*");
     add_unsupported_type("trace.ProtoIPv4");
     add_unsupported_type("trace.ProtoHTTPResponse");
-    add_unsupported_type("struct mmsghdr*");
     add_unsupported_type("trace.ProtoICMPv6");
     add_unsupported_type("struct tms*");
     add_unsupported_type("trace.ProtoIPv6");
@@ -2375,6 +2499,7 @@ void proto_register_tracee(void)
         &ett_metadata_properties,
         &ett_args,
         &ett_string_arr,
+        &ett_int_arr,
         &ett_process_lineage,
         &ett_process_lineage_process,
         &ett_triggered_by,
@@ -3232,6 +3357,9 @@ void proto_register_tracee(void)
         "Whether to show the container image in the container column", &preferences_show_container_image);
     
     tracee_tap = register_tap("tracee");
+
+    // initialize all of the possible string types
+    init_string_types();
 
     // initialize mapping of supported complex types and their dissection functions
     init_complex_types();
