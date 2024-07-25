@@ -313,10 +313,11 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     data->process->name = process_name;
 
     // add executable path
-    DISSECTOR_ASSERT((tmp_tok = json_get_object(json_data, root_tok, "executable")) != NULL);
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, tmp_tok, "path")) != NULL);
-    if (strlen(tmp_str) > 0)
-        proto_tree_add_string(process_tree, hf_executable_path, tvb, 0, 0, tmp_str);
+    if ((tmp_tok = json_get_object(json_data, root_tok, "executable")) != NULL) {
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, tmp_tok, "path")) != NULL);
+        if (strlen(tmp_str) > 0)
+            proto_tree_add_string(process_tree, hf_executable_path, tvb, 0, 0, tmp_str);
+    }
 
     // add process ID
     DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processId", &tmp_int));
@@ -412,16 +413,16 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
     proto_tree_add_uint(process_tree, hf_pid_namespace, tvb, 0, 0, (guint32)tmp_int);
 
     // add process entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "processEntityId", &tmp_int));
-    proto_tree_add_int64(process_tree, hf_process_entity_id, tvb, 0, 0, tmp_int);
+    if (json_get_int(json_data, root_tok, "processEntityId", &tmp_int))
+        proto_tree_add_int64(process_tree, hf_process_entity_id, tvb, 0, 0, tmp_int);
 
     // add thread entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "threadEntityId", &tmp_int));
-    proto_tree_add_int64(process_tree, hf_thread_entity_id, tvb, 0, 0, tmp_int);
+    if (json_get_int(json_data, root_tok, "threadEntityId", &tmp_int))
+        proto_tree_add_int64(process_tree, hf_thread_entity_id, tvb, 0, 0, tmp_int);
 
     // add parent entity ID
-    DISSECTOR_ASSERT(json_get_int(json_data, root_tok, "parentEntityId", &tmp_int));
-    proto_tree_add_int64(process_tree, hf_parent_entity_id, tvb, 0, 0, tmp_int);
+    if (json_get_int(json_data, root_tok, "parentEntityId", &tmp_int))
+        proto_tree_add_int64(process_tree, hf_parent_entity_id, tvb, 0, 0, tmp_int);
 }
 
 static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
@@ -697,7 +698,7 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
     // field not registered yet - create it
     DISSECTOR_ASSERT((arg_type = json_get_string(json_data, arg_tok, "type")) != NULL);
 
-    // override for sepcific problematic fields which are supposed to be strings but are sometimes integers
+    // override for specific problematic fields which are supposed to be strings but are sometimes integers
     if (strcmp(event_name, "security_file_open") == 0 && strcmp(arg_name, "flags") == 0)
         arg_type = "string";
     else if (strcmp(event_name, "security_file_mprotect") == 0) {
