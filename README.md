@@ -62,6 +62,8 @@ sudo usermod -aG docker <user>
 
 On Windows and Mac, make sure docker desktop is installed and your user can run containers.
 
+:warning: Do not run Wireshark as root instead of adding your user the the docker group. Running Wireshark as root is strongly discouraged, and Wireshark prevents binary plugins from loading when running as root.
+
 ### Manual installation
 
 Traceeshark can be installed using a [release](https://github.com/aquasecurity/traceeshark/releases/latest) archive containing the plugins and other required files.
