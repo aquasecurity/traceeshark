@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.3.2
+
+**Added:**
+
+- Documentation
+
+- Tracee packet capture context dissection (new Tracee feature)
+
+- Script that merges Tracee pcaps with events
+
+- IP addresses and ports in network events are now displayed in the appropriate columns
+
+- Support for various special event argument data types
+
+**Changed:**
+
+- Releases are now built for Wireshark 4.2.6
+- Command line argument in process execution events is now displayed as a generated field
+- Live capture
+  - Default docker image was changed to a recent development snapshot
+  - New packet event was added to the ***Default*** preset
+
+**Fixed:**
+
+- Makefile and build script improvements
+- Dissector and stats fixes
+- Live capture fix for older Tracee versions
+
+**Removed:**
+
+- Live capture packet injector (no longer needed thanks to new packet event)
+
 ## v0.3.1
 
 **Added:**
