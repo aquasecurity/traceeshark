@@ -51,7 +51,7 @@ REMOTE_GROUP = 'Remote capture'
 TRACEE_OPTIONS_GROUP = 'Tracee options'
 
 DEFAULT_CAPTURE_TYPE = 'local'
-DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:0.21.0'
+DEFAULT_TRACEE_IMAGE = 'aquasec/tracee:dev-20240728-071456UTC'
 DEFAULT_DOCKER_OPTIONS = '--pid=host --cgroupns=host --privileged -v /etc/os-release:/etc/os-release-host:ro -v /var/run:/var/run:ro -v /sys/fs/cgroup:/sys/fs/cgroup -v /var/run/docker.sock:/var/run/docker.sock'
 DEFAULT_CONTAINER_NAME = 'traceeshark'
 DEFAULT_LOGFILE = os.path.join(TMP_DIR, 'tracee_logs.log')
