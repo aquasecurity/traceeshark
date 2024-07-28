@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import json
 import os
 import platform
@@ -68,7 +70,7 @@ def get_latest_release_info() -> Dict[Any, Any]:
         return json.loads(resp.read().decode())
 
 
-def is_candidate_asset(asset: Dict[str, str], os_: str, arch: str) -> bool:
+def is_candidate_asset(asset: str, os_: str, arch: str) -> bool:
     parts = asset.split("-")
 
     # Check OS
