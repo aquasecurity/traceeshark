@@ -1,6 +1,5 @@
-# Traceeshark
-
-![](docs/img/traceeshark.png)
+![](docs/img/traceeshark_color.png#gh-light-mode-only)
+![](docs/img/traceeshark_white.png#gh-dark-mode-only)
 
 1. [What is Traceeshark?](#what-is-traceeshark)
 
