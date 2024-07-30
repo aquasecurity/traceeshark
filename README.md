@@ -1,6 +1,6 @@
 # Traceeshark
 
-![](images/traceeshark_256x256.png)
+![](docs/img/traceeshark.png)
 
 1. [What is Traceeshark?](#what-is-traceeshark)
 
