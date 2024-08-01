@@ -23,7 +23,7 @@ The general flow of building Traceeshark is as follows:
 :warning: On Windows, before cloning Traceeshark, make sure to run the following command: `git config --global core.autocrlf false`. Without this, git will insert carriage returns into the files and will break an important shell script!
 
 ```bash
-git clone git@bitbucket.org:scalock/traceeshark.git
+git clone https://github.com/aquasecurity/traceeshark
 cd traceeshark
 ```
 
@@ -43,6 +43,12 @@ Follow Wireshark's instructions for setting up the build environment:
 
 - [Windows](https://www.wireshark.org/docs/wsdg_html_chunked/ChSetupWindows.html) - follow sections 2.2.2 and 2.2.3. Ignore the instructions about setting up environmet variables, instead edit `scripts\setup_env.bat` with the appropriate paths to the Wireshark repository, the Qt installation and the Visual Studio installation. Run this script **in any new shell** you use to build Traceeshark/Wireshark.
 
+Additionally, make sure you have `ninja` and `rsync` installed. On Ubuntu:
+
+```bash
+sudo apt install rsync ninja-build
+```
+
 ### 4. Checkout the desired Wireshark version
 
 Release versions of Wireshark have tags in the form `wireshark-x.y.z`. Checkout the desired tag, for example:
@@ -57,39 +63,29 @@ cd ..
 
 ### 5. Configure Wireshark and install headers
 
-Configure Wireshark normally so the headers are generated and can be installed.
+Configure Wireshark normally so the headers are generated install them.
 
 On Linux and Mac:
 
 ```bash
 mkdir wireshark/build
-cd wireshark/build
+pushd wireshark/build
 cmake ..
-```
-
-On Windows:
-
-```batch
-mkdir build
-cd build
-cmake -G "Visual Studio 17 2022" -A x64 ..\wireshark
-```
-
-:information_source: If `Visual Studio 17 2022` is not a valid toolchain on your system, you can list the available options using `cmake -G`
-
-Next, install Wireshark's headers.
-
-On Linux and Mac:
-
-```bash
 sudo make install-headers
+popd
 ```
 
 On Windows (requires an elevated command prompt):
 
 ```batch
+mkdir build
+pushd build
+cmake -G "Visual Studio 17 2022" -A x64 ..\wireshark
 msbuild install-headers.vcxproj
+popd
 ```
+
+:information_source: If `Visual Studio 17 2022` is not a valid toolchain on your system, you can list the available options using `cmake -G`
 
 Keep in mind that this stage needs to be repeated for every Wireshark version you want to build Traceeshark against.
 
@@ -97,15 +93,13 @@ Keep in mind that this stage needs to be repeated for every Wireshark version yo
 
 Building Traceeshark is managed using a Makefile on Linux and Mac and build scripts on Windows.
 
-Before building for the first time, Wireshark needs to be configured again, this time for Traceeshark. This step needs to be performed any time there is a change to the Wireshark repository or to the file structure of Traceeshark.
+Before building for the first time, Wireshark needs to be configured again, this time for Traceeshark.
 
 On Linux and Mac:
 
 ```bash
 make cmake
 ```
-
-:warning: If your system does not have a Qt6 package available (e.g. Ubuntu 20.04 and older), run `make cmake USE_QT5=y` instead (this is necessary only if you plan running the Wireshark version that will be built, if you have a working Wireshark installation this is not necessary).
 
 On Windows:
 
@@ -127,7 +121,9 @@ On Windows:
 scripts\build.bat
 ```
 
-The Linux and Mac Makefile has a few extra targets that are useful for development:
+There are a few extra targets and scripts that are useful for development.
+
+On Linux and Mac:
 
 ```bash
 # Install plugins and other Traceeshark
@@ -140,6 +136,13 @@ make run
 
 # Same as run target, but with debug output enabled
 make debug
+```
+
+On Windows:
+
+```batch
+rem Install plugins and other Traceeshark files into their destinations.
+scripts\install.bat
 ```
 
 ### 7. Create a distribution archive
