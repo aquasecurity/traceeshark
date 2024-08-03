@@ -67,9 +67,9 @@ On Windows and Mac, make sure docker desktop is installed and your user can run 
 
 Traceeshark can be installed using a [release](https://github.com/aquasecurity/traceeshark/releases/latest) archive containing the plugins and other required files.
 
-Each release archive targets a specific Wireshark version and may not work with other versions. Download the appropriate release, unzip it, and run the installation script (`install.ps1` on Windows and `install.sh` on Linux/Mac)
+Each release archive targets a specific Wireshark version and may not work with other versions. Download the appropriate release, unzip it, and run the installation script from the command line (`install.ps1` on Windows and `install.sh` on Linux/Mac)
 
-:warning: The installation scripts must be run from within their directory
+:warning: Make sure you're in the same directory as the installation script when running it
 
 Now the plugins should be available to your Wireshark installation.
 
