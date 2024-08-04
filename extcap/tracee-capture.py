@@ -3,7 +3,7 @@
 from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
 
 import argparse
-from ctypes import cdll, byref, create_string_buffer
+import ctypes
 import os
 from select import select
 import shutil
@@ -45,6 +45,7 @@ REMOTE_CAPTURE_INSTALL_PATH = '/tmp/tracee_tmp'
 REMOTE_CAPTURE_OUTPUT_DIR = '/tmp/tracee_output'
 REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
+PID_FILE = os.path.join(TMP_DIR, "traceeshark.pid")
 
 GENERAL_GROUP = 'General'
 REMOTE_GROUP = 'Remote capture'
@@ -478,10 +479,10 @@ class DataOutputManager:
 
 
 def set_proc_name(newname: str):
-    libc = cdll.LoadLibrary('libc.so.6')
-    buff = create_string_buffer(len(newname)+1)
+    libc = ctypes.cdll.LoadLibrary('libc.so.6')
+    buff = ctypes.create_string_buffer(len(newname)+1)
     buff.value = newname.encode()
-    libc.prctl(15, byref(buff), 0, 0, 0)
+    libc.prctl(15, ctypes.byref(buff), 0, 0, 0)
 
 
 def ssh_connect(args: argparse.Namespace) -> paramiko.SSHClient:
@@ -547,6 +548,7 @@ def stop_capture(is_error: bool = False):
             container_id = None
 
             log("Capture stopped")
+            os.remove(PID_FILE)
 
 
 def read_output(data_output_manager: DataOutputManager):
@@ -943,7 +945,17 @@ def connection_handler_thread(transport: paramiko.Transport, dst_addr: str, dst_
         exception(ex)
 
 
+def remove_existing_tracee_container(args: argparse.Namespace, ssh_client: Optional[paramiko.SSHClient]):
+    if len(args.container_name) > 0:
+        _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
+        if returncode != 0 and 'No such container' not in err:
+            error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
+
+
 def prepare_local_capture(args: argparse.Namespace):
+    # remove container from previous run
+    remove_existing_tracee_container(args, None)
+
     # create empty file to get logs from Tracee
     if os.path.isdir(args.logfile):
         os.rmdir(args.logfile)
@@ -966,6 +978,9 @@ def prepare_local_capture(args: argparse.Namespace):
 
 
 def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHClient, sftp: SFTPManager) -> int:
+    # remove container from previous run
+    remove_existing_tracee_container(args, ssh_client)
+
     # remove preexisting Tracee logs file
     if os.path.isdir(args.logfile):
         shutil.rmtree(args.logfile)
@@ -1041,6 +1056,23 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
     return int(out)
 
 
+def stop_existing_tracee_capture():
+    if not os.path.isfile(PID_FILE):
+        return
+    
+    log('A previous capture is still running, killing it')
+    
+    # kill the existing capture
+    with open(PID_FILE, 'r') as f:
+        pid = int(f.read().rstrip())
+    if not WINDOWS:
+        os.kill(pid, signal.SIGKILL)
+    else:
+        handle = ctypes.windll.kernel32.OpenProcess(1, False, pid)
+        ctypes.windll.kernel32.TerminateProcess(handle, 0)
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
 def tracee_capture(args: argparse.Namespace):
     global local, running, container_id, copy_output, control_output_manager
 
@@ -1077,6 +1109,11 @@ def tracee_capture(args: argparse.Namespace):
     # termination, as a workaround we monitor Wireshark's pipe breaking in the reader thread as a sign of termination)
     signal.signal(signal.SIGINT, exit_cb)
     signal.signal(signal.SIGTERM, exit_cb)
+
+    # stop previous capture if exists and write new pid file
+    stop_existing_tracee_capture()
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
 
     if local:
         ssh_client = None
@@ -1180,6 +1217,7 @@ def tracee_capture(args: argparse.Namespace):
         error(f'Tracee exited with error message:\n{logs_err}')
     
     log("Capture stopped")
+    os.remove(PID_FILE)
 
 
 def main():
