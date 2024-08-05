@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.3
+
+**Added:**
+
+- Live capture - add packet event to event set selection
+
+**Fixed:**
+
+- Live capture fixes
+
 ## v0.3.2
 
 **Added:**
