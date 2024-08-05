@@ -1,7 +1,7 @@
 @echo off
 
 if not exist "build" (
-    echo Build directory doesn't exist, run "scripts\make_cmake.bat" first
+    echo Build directory doesn't exist, run "scripts\cmake.bat" first
     exit /b 1
 )
 
