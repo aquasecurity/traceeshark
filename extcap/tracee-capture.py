@@ -141,18 +141,21 @@ class ConfigVal:
         return string
 
 
-def load_preset(preset: str) -> str:
-    preset_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets', preset)
-
+def load_preset_file(preset_file: str) -> str:
     with open(preset_file, 'r') as f:
         return f.read().rstrip('\n').rstrip('\r')
+
+
+def load_preset(preset_name: str) -> str:
+    preset_file = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'presets', preset_name)
+    return load_preset_file(preset_file)
 
 
 def get_effective_tracee_options(args: argparse.Namespace) -> str:
     options = ''
 
     if args.preset_file is not None:
-        options += load_preset(args.preset_file)
+        options += load_preset_file(args.preset_file)
     elif args.preset is not None and args.preset != 'none':
         options += load_preset(args.preset)
     
