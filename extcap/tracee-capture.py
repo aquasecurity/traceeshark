@@ -521,12 +521,12 @@ def stop_capture(is_error: bool = False):
     if stopping:
         return
     
+    log("Stopping capture...")
+    
     stopping = True
     running = False
 
     if container_id is not None:
-        log("Stopping capture...")
-
         ssh_client = None
         if not local:
             ssh_client = ssh_connect(args)
@@ -534,21 +534,18 @@ def stop_capture(is_error: bool = False):
         command = f'docker stop {container_id}'
         _, err, returncode = send_command(local, command, ssh_client)
         if returncode != 0 and 'No such container' not in err and 'is not running' not in err:
-            error(f'docker stop returned with error code {returncode}, stderr dump:\n{err}\n')
+            error(f'docker stop returned with error code {returncode}, stderr dump:\n{err}')
         
         # an error occurred so we assume the main thread is not functioning, remove the container here
         if is_error:
             command = f'docker rm {container_id}'
             _, err, returncode = send_command(local, command, ssh_client)
             if returncode != 0 and 'No such container' not in err:
-                error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}\n')
+                error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
 
             # set this so if the main thread is still functioning,
             # it will not try to read the container's logs and remove it
             container_id = None
-
-            log("Capture stopped")
-            os.remove(PID_FILE)
 
 
 def read_output(data_output_manager: DataOutputManager):
@@ -912,14 +909,22 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
     global running
 
     # wait for incoming connection
-    channel = transport.accept(None)
+    while running:
+        channel = transport.accept(0.1)
+        if channel is None:
+            continue
+        else:
+            break
+    
+    if not running:
+        return
 
     # connect to the tunnel's receiving end
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((dst_addr, dst_port))
     except ConnectionRefusedError:
-        error(f'could not connect to {(dst_addr, dst_port)}\n')
+        error(f'could not connect to {(dst_addr, dst_port)}')
     
     while running:
         r, _, _ = select([sock, channel], [], [])
@@ -934,7 +939,10 @@ def handle_connection(transport: paramiko.Transport, dst_addr: str, dst_port: in
                 continue
             sock.send(data)
     
-    channel.close()
+    try:
+        channel.close()
+    except EOFError:
+        pass
     sock.close()
 
 
@@ -1065,12 +1073,18 @@ def stop_existing_tracee_capture():
     # kill the existing capture
     with open(PID_FILE, 'r') as f:
         pid = int(f.read().rstrip())
-    if not WINDOWS:
-        os.kill(pid, signal.SIGKILL)
-    else:
-        handle = ctypes.windll.kernel32.OpenProcess(1, False, pid)
-        ctypes.windll.kernel32.TerminateProcess(handle, 0)
-        ctypes.windll.kernel32.CloseHandle(handle)
+    
+    try:
+        if not WINDOWS:
+            os.kill(pid, signal.SIGKILL)
+        else:
+            handle = ctypes.windll.kernel32.OpenProcess(1, False, pid)
+            ctypes.windll.kernel32.TerminateProcess(handle, 0)
+            ctypes.windll.kernel32.CloseHandle(handle)
+    
+    # previous capture exited without removing the PID file
+    except ProcessLookupError:
+        pass
 
 
 def tracee_capture(args: argparse.Namespace):
@@ -1114,6 +1128,10 @@ def tracee_capture(args: argparse.Namespace):
     stop_existing_tracee_capture()
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
+    
+    # checkpoint
+    if not running:
+        return
 
     if local:
         ssh_client = None
@@ -1126,11 +1144,9 @@ def tracee_capture(args: argparse.Namespace):
         sftp = SFTPManager(ssh_client.open_sftp())
         sshd_pid = prepare_remote_capture(args, ssh_client, sftp)
     
-    # remove container from previous run
-    if len(args.container_name) > 0:
-        _, err, returncode = send_command(local, f"docker rm -f {args.container_name}", ssh_client)
-        if returncode != 0 and 'No such container' not in err:
-            error(f'docker rm -f returned with error code {returncode}, stderr dump:\n{err}')
+    # checkpoint
+    if not running:
+        return
     
     # start toolbar control thread
     control_th = threading.Thread(target=toolbar_thread, args=(control_inf, control_output_manager, args.output_dir, sftp), daemon=True)
@@ -1146,6 +1162,10 @@ def tracee_capture(args: argparse.Namespace):
     if returncode != 0:
         error(f'docker images returned with error code {returncode}, stderr dump:\n{err}')
     
+    # checkpoint
+    if not running:
+        return
+    
     # pull container image if not present
     if args.container_image not in out:
         command = f'docker pull {args.container_image}'
@@ -1153,6 +1173,10 @@ def tracee_capture(args: argparse.Namespace):
         _, err, returncode = send_command(local, command, ssh_client)
         if returncode != 0:
             error(f'docker pull returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # checkpoint
+    if not running:
+        return
 
     # run Tracee container
     command = build_docker_run_command(args, local, sshd_pid=sshd_pid)
@@ -1160,6 +1184,22 @@ def tracee_capture(args: argparse.Namespace):
     out, err, returncode = send_command(local, command, ssh_client)
     if returncode != 0:
         error(f'docker run returned with error code {returncode}, stderr dump:\n{err}')
+    
+    # checkpoint
+    if not running:
+        command = f'docker kill {container_id}'
+        _, err, returncode = send_command(local, command, ssh_client)
+        if returncode != 0 and 'No such container' not in err and 'is not running' not in err:
+            error(f'docker kill returned with error code {returncode}, stderr dump:\n{err}')
+        
+        command = f'docker rm {container_id}'
+        _, err, returncode = send_command(local, command, ssh_client)
+        if returncode != 0 and 'No such container' not in err:
+            error(f'docker rm returned with error code {returncode}, stderr dump:\n{err}')
+        
+        return
+    
+    # from this point the stop_capture function is responsible for stopping Tracee's cotainer
     container_id = out.rstrip('\n')
 
     # monitor for tracee.pid file to know when Tracee is running
@@ -1215,9 +1255,6 @@ def tracee_capture(args: argparse.Namespace):
     
     if len(logs_err) > 0:
         error(f'Tracee exited with error message:\n{logs_err}')
-    
-    log("Capture stopped")
-    os.remove(PID_FILE)
 
 
 def main():
@@ -1281,6 +1318,7 @@ def main():
         show_dlts()
     elif args.capture:
         tracee_capture(args)
+        log("Capture stopped")
     
     sys.exit(0)
 
@@ -1300,6 +1338,10 @@ def main_wrapper():
         exception(ex)
     finally:
         sys.stderr.flush()
+        try:
+            os.remove(PID_FILE)
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
