@@ -19,6 +19,8 @@ Traceeshark also provides the ability to analyze system events side by side with
 
 Another feature of Traceeshark is the ability to capture events using Tracee directly from Wireshark and have them stream in like a network capture. This can be done either locally on a Linux machine running Wireshark, semi-locally using docker desktop’s VM on Windows and Mac, or even remotely over SSH.
 
+For an overview of Traceeshark and an example of how it can be used for malware analysis, you can read [Go deeper: Linux runtime visibility meets Wireshark](https://www.aquasec.com/blog/go-deeper-linux-runtime-visibility-meets-wireshark/).
+
 ## Getting started
 
 The simplest way to install Traceeshark is using the autoinstall script.
