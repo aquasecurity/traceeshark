@@ -154,6 +154,10 @@ def main():
     latest_release = get_latest_release_info()
 
     assets = {asset["name"]: asset["id"] for asset in latest_release["assets"] if is_candidate_asset(asset["name"], os_, arch)}
+
+    if len(assets) == 0:
+        print("No releases exist for your system. Please open an issue and request a release to be added, or build Traceeshark from source.")
+        return
     
     selected_asset = None
     if ws_version is not None:
