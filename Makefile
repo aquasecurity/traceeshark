@@ -2,12 +2,6 @@ include .env
 export
 
 OS_NAME := $(shell uname -s)
-WS_VERSION_SHORT := $(shell if [ -x "wireshark/build/run/wireshark" ]; then wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+"; fi)
-ifeq ($(OS_NAME),Darwin)
-	WS_VERSION_DIR := $(subst .,-,$(WS_VERSION_SHORT))
-else
-	WS_VERSION_DIR := $(WS_VERSION_SHORT)
-endif
 
 # update Wireshark source tree and build
 all: sync build
@@ -65,9 +59,16 @@ install:
 	@cp -r extcap/tracee-capture ~/.config/wireshark/extcap
 	@chmod +x ~/.config/wireshark/extcap/tracee-capture/new-entrypoint.sh
 
+	$(eval WS_VERSION_SHORT := $(shell if [ -x "wireshark/build/run/wireshark" ]; then wireshark/build/run/wireshark --version | grep -o -E "Wireshark [0-9]+\.[0-9]+\.[0-9]+" | grep -o -E "[0-9]+\.[0-9]+"; fi))
+ifeq ($(OS_NAME),Darwin)
+	$(eval WS_VERSION_DIR := $(subst .,-,$(WS_VERSION_SHORT)))
+else
+	$(eval WS_VERSION_DIR := $(WS_VERSION_SHORT))
+endif
+
 	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan
 	@mkdir -p ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap
-
+	
 	@cp wireshark/build/run/tracee-event* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-event.so
 	@cp wireshark/build/run/tracee-network-capture* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/epan/tracee-network-capture.so
 	@cp wireshark/build/run/tracee-json* ~/.local/lib/wireshark/plugins/$(WS_VERSION_DIR)/wiretap/tracee-json.so
@@ -85,9 +86,9 @@ cmake: clean sync
 	@rm -rf wireshark/build && mkdir wireshark/build
 # Wireshark changed DISABLE_WERROR to ENABLE_WERROR at some point. Use both for compatibility (even though it causes a cmake warning to be thrown)
 ifeq ($(WERROR),y)
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -DDISABLE_WERROR=OFF -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=No -DENABLE_WERROR=ON -DDISABLE_WERROR=OFF -S wireshark -B wireshark/build
 else
-	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF -DDISABLE_WERROR=ON -S wireshark -B wireshark/build
+	@cmake -G Ninja -DTRACEESHARK_VERSION=$(TRACEESHARK_VERSION) -DENABLE_CCACHE=No -DENABLE_WERROR=OFF -DDISABLE_WERROR=ON -S wireshark -B wireshark/build
 endif
 
 dist: all
