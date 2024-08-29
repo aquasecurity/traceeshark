@@ -3,7 +3,7 @@ setlocal
 
 FOR /F "tokens=*" %%i in ('type .env') do SET %%i
 
-call make_clean.bat
+call scripts\clean.bat
 robocopy .\ wireshark CMakeListsCustom.txt /COPY:DAT
 robocopy plugins\epan wireshark\plugins\epan common.h /COPY:DAT
 robocopy plugins\epan wireshark\plugins\epan wsjson_extensions.c /COPY:DAT
