@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.4
+
+**Added:**
+
+- Releases for Wireshark 4.4.0
+
+- Live capture: packet events (`net_packet_raw`) can be selected in event sets
+
+**Changed:**
+
+- Live capture: default docker image was changed to v0.22.0
+
+**Fixed:**
+
+- Build and install script fixes
+
 ## v0.3.3
 
 **Added:**
