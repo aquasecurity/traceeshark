@@ -1,26 +1,3 @@
-function Version-LessThan {
-    param (
-        [string]$version1,
-        [string]$version2
-    )
-
-    $version1Parts = $version1.Split('.')
-    $version2Parts = $version2.Split('.')
-
-    $major1 = [int]$version1Parts[0]
-    $minor1 = [int]$version1Parts[1]
-
-    $major2 = [int]$version2Parts[0]
-    $minor2 = [int]$version2Parts[1]
-
-    if ($major1 -lt $major2 -or ($major1 -eq $major2 -and $minor1 -lt $minor2)) {
-        return $true
-    }
-    else {
-        return $false
-    }
-}
-
 $wsVersionWanted = (Get-Content -Path "ws_version.txt" | Select-String -Pattern "\d+\.\d+\.\d+" -AllMatches).Matches.Value
 
 if (Get-Command "wireshark" -ErrorAction SilentlyContinue) {
@@ -59,12 +36,7 @@ New-Item -Path "$wsPersonalDir\profiles" -ItemType Directory -Force | Out-Null
 Copy-Item -Path "profiles\Tracee" -Destination "$wsPersonalDir\profiles" -Recurse -Force
 Write-Output "[*] Installed profile to $wsPersonalDir\profiles\Tracee"
 
-if (Version-LessThan -version1 $wsShortVersion -version2 "4.3") {
-    $wsPluginsDir = "$wsPersonalDir\plugins\$wsShortVersion"
-}
-else {
-    $wsPluginsDir = "$wsPersonalDir\plugins"
-}
+$wsPluginsDir = "$wsPersonalDir\plugins\$wsShortVersion"
 
 New-Item -Path "$wsPluginsDir\epan" -ItemType Directory -Force | Out-Null
 Copy-Item "tracee-event.dll" "$wsPluginsDir\epan" -Force
