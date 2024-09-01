@@ -235,20 +235,170 @@ static const char *stringify_decoded_data(packet_info *pinfo, guchar *decoded_da
     return wmem_strbuf_get_str(str);
 }
 
-static const char *get_file_type(guchar *decoded_data, gsize len)
+static const char *get_file_type_magic(const gchar *data)
 {
-    const char *data = (const char *)decoded_data;
-
-    if (len >= 4 && strncmp(data, "\x7F" "ELF", 4) == 0)
+    if (g_str_has_prefix(data, "\x7F" "ELF"))
         return "ELF";
-    else if (len >= 2 && strncmp(data, "#!", 2) == 0)
+    else if (g_str_has_prefix(data, "#!"))
         return "Script";
-    else if (len >= 4 && strncmp(data, "\xED\xAB\xEE\xDB", 4) == 0)
+    else if (g_str_has_prefix(data, "\xED\xAB\xEE\xDB"))
         return "RPM package";
-    else if (len >= 8 && strncmp(data, "!<arch>\x0A", 8) == 0)
+    else if (g_str_has_prefix(data, "!<arch>\x0A"))
         return "DEB package";
+    else if (g_str_has_prefix(data, "<?php"))
+        return "PHP script";
+    else if (g_str_has_prefix(data, "<%@"))
+        return "JSP script";
+    else if (g_str_has_prefix(data, "<%"))
+        return "ASP script";
+    else if (g_str_has_prefix(data, "PK"))
+        return "ZIP archive";
+    else if (g_str_has_prefix(data, "\xCA\xFE\xBA\xBE"))
+        return "Java class";
+    else if (g_str_has_prefix(data, "\x33\x0D\x0A\x63"))
+        return "Python compiled bytecode";
+    else if (g_str_has_prefix(data, "MZ"))
+        return "Windows executable/DLL";
+    else if (g_str_has_prefix(data, "BZh"))
+        return "BZIP2 archive";
+    else if (g_str_has_prefix(data, "\x1F\x8B"))
+        return "GZIP archive";
+    else if (g_str_has_prefix(data, "ustar"))
+        return "TAR archive";
+    else if (g_str_has_prefix(data, "\x52\x61\x72\x21\x1A\x07"))
+        return "RAR archive";
+    else if (g_str_has_prefix(data, "\xFE\xED\xFA\xCE"))
+        return "Mach-O 32-bit big-endian";
+    else if (g_str_has_prefix(data, "\xCE\xFA\xED\xFE"))
+        return "Mach-O 32-bit little-endian";
+    else if (g_str_has_prefix(data, "\xFE\xED\xFA\xCF"))
+        return "Mach-O 64-bit big-endian";
+    else if (g_str_has_prefix(data, "\xCF\xFA\xED\xFE"))
+        return "Mach-O 64-bit little-endian";
+    else if (g_str_has_prefix(data, "REDIS"))
+        return "Redis RDB";
+    else if (g_str_has_prefix(data, "\xAC\xED"))
+        return "Java serialized object";
+    else if (g_str_has_prefix(data, "X50!P"))
+        return "EICAR antivirus test file";
     
     return NULL;
+}
+
+static const char *get_file_type_extension(const char *file_path)
+{
+    if (g_str_has_suffix(file_path, ".tar"))
+        return "TAR archive";
+    else if (g_str_has_suffix(file_path, ".gz"))
+        return "GZIP archive";
+    else if (g_str_has_suffix(file_path, ".xz"))
+        return "XZ archive";
+    else if (g_str_has_suffix(file_path, ".bz2"))
+        return "BZIP2 archive";
+    else if (g_str_has_suffix(file_path, ".json"))
+        return "JSON";
+    else if (g_str_has_suffix(file_path, ".java"))
+        return "Java source";
+    else if (g_str_has_suffix(file_path, ".class"))
+        return "Java class";
+    else if (g_str_has_suffix(file_path, ".jar"))
+        return "Java package";
+    else if (g_str_has_suffix(file_path, ".war"))
+        return "Java package";
+    else if (g_str_has_suffix(file_path, ".pl"))
+        return "Perl script";
+    else if (g_str_has_suffix(file_path, ".py"))
+        return "Python script";
+    else if (g_str_has_suffix(file_path, ".pyc"))
+        return "Python compiled bytecode";
+    else if (g_str_has_suffix(file_path, ".rb"))
+        return "Ruby script";
+    else if (g_str_has_suffix(file_path, ".js"))
+        return "JavaScript source";
+    else if (g_str_has_suffix(file_path, ".mjs"))
+        return "Module JavaScript source";
+    else if (g_str_has_suffix(file_path, ".lua"))
+        return "Lua script";
+    else if (g_str_has_suffix(file_path, ".sh"))
+        return "Shell script";
+    else if (g_str_has_suffix(file_path, ".ps1"))
+        return "Powershell script";
+    else if (g_str_has_suffix(file_path, ".sql"))
+        return "SQL script";
+    else if (g_str_has_suffix(file_path, ".asp"))
+        return "ASP script";
+    else if (g_str_has_suffix(file_path, ".jsp"))
+        return "JSP script";
+    else if (g_str_has_suffix(file_path, ".jspx"))
+        return "JSPX script";
+    else if (g_str_has_suffix(file_path, ".php"))
+        return "PHP source";
+    else if (g_str_has_suffix(file_path, ".aspx"))
+        return "ASP.NET script";
+    else if (g_str_has_suffix(file_path, ".so"))
+        return "Linux shared library";
+    else if (g_str_has_suffix(file_path, ".dll"))
+        return "Windows DLL";
+    else if (g_str_has_suffix(file_path, ".exe"))
+        return "Windows executable";
+    else if (g_str_has_suffix(file_path, ".com"))
+        return "DOS executable";
+    else if (g_str_has_suffix(file_path, ".dylib"))
+        return "macOS dynamic library";
+    else if (g_str_has_suffix(file_path, ".docx"))
+        return "Word document";
+    else if (g_str_has_suffix(file_path, ".zip"))
+        return "ZIP archive";
+    else if (g_str_has_suffix(file_path, ".swift"))
+        return "Swift source";
+    else if (g_str_has_suffix(file_path, ".c"))
+        return "C source";
+    else if (g_str_has_suffix(file_path, ".cpp"))
+        return "C++ source";
+    else if (g_str_has_suffix(file_path, ".h"))
+        return "C/C++ header";
+    else if (g_str_has_suffix(file_path, ".hpp"))
+        return "C++ header";
+    else if (g_str_has_suffix(file_path, ".go"))
+        return "Go source";
+    else if (g_str_has_suffix(file_path, ".ts"))
+        return "TypeScript source";
+    else if (g_str_has_suffix(file_path, ".rs"))
+        return "Rust source";
+    else if (g_str_has_suffix(file_path, ".kt"))
+        return "Kotlin source";
+    else if (g_str_has_suffix(file_path, ".scala"))
+        return "Scala source";
+    else if (g_str_has_suffix(file_path, ".groovy"))
+        return "Groovy script";
+    
+    return NULL;
+}
+
+const char *choose_file_type(const char *file_type_magic, const char *file_type_extension)
+{
+    if (file_type_magic == NULL && file_type_extension == NULL)
+        return NULL;
+    if (file_type_magic != NULL && file_type_extension == NULL)
+        return file_type_magic;
+    if (file_type_magic == NULL && file_type_extension != NULL)
+        return file_type_extension;
+    
+    // prefer specific script types
+    if (strcmp(file_type_magic, "Script") == 0 && g_str_has_suffix(file_type_extension, "script"))
+        return file_type_extension;
+    
+    // prefer specific executable types
+    if (strcmp(file_type_magic, "ELF") == 0 && strcmp(file_type_extension, "Linux shared library") == 0)
+        return file_type_extension;
+    if (strcmp(file_type_magic, "Windows executable/DLL") == 0 &&
+        (strcmp(file_type_extension, "Windows executable") == 0 || strcmp(file_type_extension, "Windows DLL") == 0))
+        return file_type_extension;
+    if (g_str_has_prefix(file_type_magic, "Mach-O") && strcmp(file_type_extension, "macOS dynamic library") == 0)
+        return wmem_strdup_printf(wmem_packet_scope(), "%s (dynamic library)", file_type_magic);
+    
+    // prefer file type from magic for all other cases
+    return file_type_magic;
 }
 
 static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data)
@@ -257,7 +407,7 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     const gchar *bytes, *pathname;
     guchar *decoded_data;
     gsize len;
-    const char *decoded_string, *file_type;
+    const char *decoded_data_repr, *decoded_data_str, *file_type_magic, *file_type_extension = NULL, *file_type;
     proto_item *tmp_item;
 
     if ((bytes = wanted_field_get_str("tracee.args.magic_write.bytes")) == NULL)
@@ -267,19 +417,26 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     decoded_data = g_base64_decode(bytes, &len);
 
     // add decoded data
-    decoded_string = stringify_decoded_data(pinfo, decoded_data, len);
-    tmp_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_decoded_data, tvb, 0, 0, decoded_string);
+    decoded_data_repr = stringify_decoded_data(pinfo, decoded_data, len);
+    tmp_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_decoded_data, tvb, 0, 0, decoded_data_repr);
     proto_item_set_generated(tmp_item);
 
+    pathname = wanted_field_get_str("tracee.args.magic_write.pathname");
+
     // add file type, if known
-    if ((file_type = get_file_type(decoded_data, len)) != NULL) {
+    decoded_data_str = wmem_strndup(pinfo->pool, decoded_data, len);
+    file_type_magic = get_file_type_magic(decoded_data_str);
+    if (pathname != NULL)
+        file_type_extension = get_file_type_extension(pathname);
+    file_type = choose_file_type(file_type_magic, file_type_extension);
+    if (file_type != NULL) {
         tmp_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_file_type, tvb, 0, 0, file_type);
         proto_item_set_generated(tmp_item);
     }
 
     // set info column
-    if ((pathname = wanted_field_get_str("tracee.args.magic_write.pathname")) != NULL) {
-        col_add_fstr(pinfo->cinfo, COL_INFO, "%s magic written to %s", file_type != NULL ? file_type : "Unknown", pathname);
+    if (pathname != NULL) {
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s written to %s", file_type != NULL ? file_type : "Unknown", pathname);
     }
 
     g_free(decoded_data);
