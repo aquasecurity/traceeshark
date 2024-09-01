@@ -9,8 +9,6 @@ void register_wanted_field(const gchar *filter_name)
 {
     gchar *key;
 
-    ws_info("registering wanted field %s", filter_name);
-
     // make sure wanted fields map exists
     if (wanted_fields == NULL) {
         wanted_fields = wmem_map_new(wmem_epan_scope(), g_str_hash, g_str_equal);
@@ -20,6 +18,8 @@ void register_wanted_field(const gchar *filter_name)
     // check if this field was already registered
     if (wmem_map_contains(wanted_fields, filter_name))
         return;
+    
+    ws_info("registering wanted field %s", filter_name);
     
     // add field to wanted fields map
     key = wmem_strdup(wmem_epan_scope(), filter_name);
