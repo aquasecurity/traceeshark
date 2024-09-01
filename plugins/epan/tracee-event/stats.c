@@ -98,6 +98,7 @@ static tap_packet_status file_types_stats_tree_packet(stats_tree* st, packet_inf
 {
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
     const gchar *file_type, *pathname, *extension = NULL;
+    int node_id;
 
     // we only care about magic_write events
     if (strcmp(data->event_name, "magic_write") != 0)
@@ -114,14 +115,18 @@ static tap_packet_status file_types_stats_tree_packet(stats_tree* st, packet_inf
         
         // no pathname or no extension
         if (extension == NULL)
-            tick_stat_node(st, "Unknown", 0, TRUE);
+            node_id = tick_stat_node(st, "Unknown", 0, TRUE);
         else {
             tick_stat_node(st, other_extensions_node_name, 0, FALSE);
-            tick_stat_node(st, extension, other_extensions_node, FALSE);
+            node_id = tick_stat_node(st, extension, other_extensions_node, TRUE);
         }
     }
     else
-        tick_stat_node(st, file_type, 0, TRUE);
+        node_id = tick_stat_node(st, file_type, 0, TRUE);
+    
+    // add file path under the file type node
+    if (node_id != -1 && pathname != NULL)
+        tick_stat_node(st, pathname, node_id, FALSE);
     
     return TAP_PACKET_REDRAW;
 }
