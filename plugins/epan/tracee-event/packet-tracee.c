@@ -463,7 +463,7 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
     else {
         data->container = wmem_new0(pinfo->pool, struct container_info);
         data->container->id = id;
-        data->container->name = name;
+        data->container->name = name != NULL ? name : wmem_strndup(pinfo->pool, id, 12); // sometimes container name is not present, use shortened ID as name
         data->container->image = image;
         tmp_item = proto_tree_add_boolean(container_tree, hf_is_container, tvb, 0, 0, TRUE);
     }
@@ -474,7 +474,8 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
         if (preferences_container_identifier == CONTAINER_IDENTIFIER_ID)
             container_col_str = wmem_strndup(pinfo->pool, id, 12);
         else
-            container_col_str = wmem_strdup(pinfo->pool, name);
+            // use data->container->name because it's valid even when container name is not present
+            container_col_str = wmem_strdup(pinfo->pool, data->container->name);
         
         proto_item_append_text(container_item, ": %s", container_col_str);
 
