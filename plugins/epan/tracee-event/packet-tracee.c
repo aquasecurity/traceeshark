@@ -229,11 +229,11 @@ static gint ett_dns_query_data = -1;
 
 // preferences
 gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
-static gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
+gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
-static bool preferences_show_container_image = FALSE;
+bool preferences_show_container_image = FALSE;
 #else
-static gboolean preferences_show_container_image = FALSE;
+gboolean preferences_show_container_image = FALSE;
 #endif
 
 struct event_dynamic_hf {
@@ -425,7 +425,8 @@ static void dissect_process_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree
         proto_tree_add_int64(process_tree, hf_parent_entity_id, tvb, 0, 0, tmp_int);
 }
 
-static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    gchar *json_data, jsmntok_t *root_tok, struct tracee_dissector_data *data)
 {
     proto_item *container_item, *tmp_item;
     proto_tree *container_tree;
@@ -459,8 +460,13 @@ static void dissect_container_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tr
         proto_item_append_text(container_item, ": none");
         tmp_item = proto_tree_add_boolean(container_tree, hf_is_container, tvb, 0, 0, FALSE);
     }
-    else
+    else {
+        data->container = wmem_new0(pinfo->pool, struct container_info);
+        data->container->id = id;
+        data->container->name = name;
+        data->container->image = image;
         tmp_item = proto_tree_add_boolean(container_tree, hf_is_container, tvb, 0, 0, TRUE);
+    }
     proto_item_set_generated(tmp_item);
 
     // add container column and add info to container item
@@ -543,7 +549,7 @@ static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
     dissect_process_fields(tvb, pinfo, context_tree, json_data, root_tok, data);
 
     // add container fields
-    dissect_container_fields(tvb, pinfo, context_tree, json_data, root_tok);
+    dissect_container_fields(tvb, pinfo, context_tree, json_data, root_tok, data);
 
     // add k8s fields
     dissect_k8s_fields(tvb, context_tree, json_data, root_tok);

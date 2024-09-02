@@ -5,6 +5,12 @@ extern value_string_ext dns_types_vals_ext;
 extern const value_string dns_classes[];
 
 extern gint preferences_pid_format;
+extern gint preferences_container_identifier;
+#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
+extern bool preferences_show_container_image;
+#else
+extern gboolean preferences_show_container_image;
+#endif
 
 struct process_info {
     gint32 pid;
@@ -16,6 +22,12 @@ struct process_info {
     const char *command_line;
 };
 
+struct container_info {
+    const char *id;
+    const char *name;
+    const char *image;
+};
+
 struct tracee_dissector_data {
     proto_tree *args_tree;
     const gchar *event_name;
@@ -24,6 +36,7 @@ struct tracee_dissector_data {
     const gchar *signature_name;
     tvbuff_t *packet_tvb;
     struct process_info *process;
+    struct container_info *container;
 };
 
 enum field_type {
