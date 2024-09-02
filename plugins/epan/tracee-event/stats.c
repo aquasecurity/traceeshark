@@ -3,80 +3,98 @@
 
 #include <epan/stats_tree.h>
 
-static int events_node = -1;
-static int signatures_node = -1;
-static int severity_0_node = -1;
-static int severity_1_node = -1;
-static int severity_2_node = -1;
-static int severity_3_node = -1;
-static int other_severity_node = -1;
-
-static const gchar *events_node_name = "Events";
-static const gchar *signatures_node_name = "Signatures";
-static const gchar *severity_0_node_name = "Severity 0";
-static const gchar *severity_1_node_name = "Severity 1";
-static const gchar *severity_2_node_name = "Severity 2";
-static const gchar *severity_3_node_name = "Severity 3";
-static const gchar *other_severity_node_name = "Other Severities";
-
-static void event_counts_stats_tree_init(stats_tree *st)
+static void event_counts_stats_tree_init(stats_tree *st _U_)
 {
-    events_node = stats_tree_create_node(st, events_node_name, 0, STAT_DT_INT, TRUE);
-    signatures_node = stats_tree_create_node(st, signatures_node_name, 0, STAT_DT_INT, FALSE);
-    severity_0_node = stats_tree_create_node(st, severity_0_node_name, signatures_node, STAT_DT_INT, TRUE);
-    severity_1_node = stats_tree_create_node(st, severity_1_node_name, signatures_node, STAT_DT_INT, TRUE);
-    severity_2_node = stats_tree_create_node(st, severity_2_node_name, signatures_node, STAT_DT_INT, TRUE);
-    severity_3_node = stats_tree_create_node(st, severity_3_node_name, signatures_node, STAT_DT_INT, TRUE);
-    other_severity_node = stats_tree_create_node(st, other_severity_node_name, signatures_node, STAT_DT_INT, TRUE);
+    return;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status event_counts_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status event_counts_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+static const gchar *container_node_name(struct container_info *container)
+{
+    const gchar *node_name;
+
+    if (preferences_container_identifier == CONTAINER_IDENTIFIER_ID && container->id != NULL)
+        node_name = wmem_strndup(wmem_packet_scope(), container->id, 12);
+    else if (container->name != NULL)
+        node_name = container->name;
+    else
+        DISSECTOR_ASSERT_NOT_REACHED();
+    
+    if (preferences_show_container_image && container->image != NULL)
+        node_name = wmem_strdup_printf(wmem_packet_scope(), "%s (%s)", node_name, container->image);
+    
+    return node_name;
+}
+
+static tap_packet_status event_counts_stats_tree_packet(stats_tree *st, const void *p, bool per_container)
 {
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
     int node;
     const gchar *node_name;
 
+    if (per_container) {
+        if (data->container == NULL) {
+            node = tick_stat_node(st, "Host", 0, TRUE);
+            // keep host on top
+            stat_node_set_flags(st, "Host", 0, TRUE, ST_FLG_SORT_TOP);
+        }
+        else
+            node = tick_stat_node(st, container_node_name(data->container), 0, TRUE);
+    }
+    else
+        node = 0; // tree root
+
     if (!data->is_signature) {
-        tick_stat_node(st, events_node_name, 0, FALSE);
-        tick_stat_node(st, data->event_name, events_node, FALSE);
+        node = tick_stat_node(st, "Events", node, TRUE);
+        tick_stat_node(st, data->event_name, node, FALSE);
     }
     else {
-        tick_stat_node(st, signatures_node_name, 0, FALSE);
+        node = tick_stat_node(st, "Signatures", node, TRUE);
 
         switch (data->signature_severity) {
             case 0:
-                node = severity_0_node;
-                node_name = severity_0_node_name;
+                node_name = "Severity 0";
                 break;
             case 1:
-                node = severity_1_node;
-                node_name = severity_1_node_name;
+                node_name = "Severity 1";
                 break;
             case 2:
-                node = severity_2_node;
-                node_name = severity_2_node_name;
+                node_name = "Severity 2";
                 break;
             case 3:
-                node = severity_3_node;
-                node_name = severity_3_node_name;
+                node_name = "Severity 3";
                 break;
             default:
-                node = other_severity_node;
-                node_name = other_severity_node_name;
+                node_name = "Other Severities";
                 break;
         }
 
-        tick_stat_node(st, node_name, signatures_node, FALSE);
+        node = tick_stat_node(st, node_name, node, TRUE);
         tick_stat_node(st, data->event_name, node, FALSE);
     }
 
     return TAP_PACKET_REDRAW;
+}
+
+#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
+static tap_packet_status event_counts_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p)
+#else
+static tap_packet_status event_counts_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
+#endif
+{
+    return event_counts_stats_tree_packet(st, p, false);
+}
+
+#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
+static tap_packet_status event_counts_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p)
+#else
+static tap_packet_status event_counts_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
+    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
+#endif
+{
+    return event_counts_stats_tree_packet(st, p, true);
 }
 
 static int other_extensions_node = -1;
@@ -402,12 +420,16 @@ void register_tracee_statistics(void)
     stats_tree_context = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
 
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3))) // new stats tree API
-    stats_tree_cfg *event_counts_st, *file_types_st, *process_tree_st, *process_tree_with_files_st,
-        *process_tree_with_network_st, *process_tree_with_signatures_st;
+    stats_tree_cfg *event_counts_global_st, *event_counts_container_st, *file_types_st, *process_tree_st,
+        *process_tree_with_files_st, *process_tree_with_network_st, *process_tree_with_signatures_st;
 
-    event_counts_st = stats_tree_register_plugin("tracee", "tracee_events", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts",
-        0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_set_first_column_name(event_counts_st, "Event Name");
+    event_counts_global_st = stats_tree_register_plugin("tracee", "tracee_events_global", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts" STATS_TREE_MENU_SEPARATOR "Global",
+        0, event_counts_global_stats_tree_packet, event_counts_stats_tree_init, NULL);
+    stats_tree_set_first_column_name(event_counts_global_st, "Event Name");
+
+    event_counts_container_st = stats_tree_register_plugin("tracee", "tracee_events_container", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts" STATS_TREE_MENU_SEPARATOR "Per Container",
+        0, event_counts_container_stats_tree_packet, event_counts_stats_tree_init, NULL);
+    stats_tree_set_first_column_name(event_counts_container_st, "Event Name");
 
     file_types_st = stats_tree_register_plugin("tracee", "tracee_file_types", "Tracee" STATS_TREE_MENU_SEPARATOR "File Types",
         0, file_types_stats_tree_packet, file_types_stats_tree_init, NULL);
@@ -429,8 +451,10 @@ void register_tracee_statistics(void)
         0, process_tree_with_signatures_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
     stats_tree_set_first_column_name(process_tree_with_signatures_st, "Process/Signature");
 #else // old stats tree API
-    stats_tree_register_plugin("tracee", "tracee_events", "Tracee/Event Counts",
-        0, event_counts_stats_tree_packet, event_counts_stats_tree_init, NULL);
+    stats_tree_register_plugin("tracee", "tracee_events_global", "Tracee/Event Counts (global)",
+        0, event_counts_global_stats_tree_packet, event_counts_stats_tree_init, NULL);
+    stats_tree_register_plugin("tracee", "tracee_events_container", "Tracee/Event Counts (per container)",
+        0, event_counts_container_stats_tree_packet, event_counts_stats_tree_init, NULL);
     stats_tree_register_plugin("tracee", "tracee_file_types", "Tracee/File Types",
         0, file_types_stats_tree_packet, file_types_stats_tree_init, NULL);
     stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee/Process Tree",

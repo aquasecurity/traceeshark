@@ -435,9 +435,8 @@ static int enrich_magic_write(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
     }
 
     // set info column
-    if (pathname != NULL) {
-        col_add_fstr(pinfo->cinfo, COL_INFO, "%s written to %s", file_type != NULL ? file_type : "Unknown", pathname);
-    }
+    if (pathname != NULL)
+        col_add_fstr(pinfo->cinfo, COL_INFO, "%s written to %s", file_type != NULL ? file_type : "Unknown file type", pathname);
 
     g_free(decoded_data);
     return 0;
