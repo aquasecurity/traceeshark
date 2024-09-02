@@ -102,6 +102,16 @@ static void file_types_stats_tree_init(stats_tree *st _U_)
     return;
 }
 
+static const gchar *get_file_extension(const gchar *file_path)
+{
+    const gchar *basename, *tmp;
+    
+    tmp = g_path_get_basename(file_path);
+    basename = wmem_strdup(wmem_packet_scope(), tmp);
+    g_free((gpointer)tmp);
+    return g_strrstr(basename, ".");
+}
+
 static tap_packet_status file_types_stats_tree_packet(stats_tree *st, const void *p, bool per_container)
 {
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
@@ -131,7 +141,7 @@ static tap_packet_status file_types_stats_tree_packet(stats_tree *st, const void
     if (file_type == NULL) {
         // group unknown file types by their extension
         if (pathname != NULL)
-            extension = g_strrstr(pathname, ".");
+            extension = get_file_extension(pathname);
         
         // no pathname or no extension
         if (extension == NULL)
