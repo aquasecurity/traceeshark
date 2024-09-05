@@ -12,6 +12,12 @@ extern bool preferences_show_container_image;
 extern gboolean preferences_show_container_image;
 #endif
 
+struct container_info {
+    const char *id;
+    const char *name;
+    const char *image;
+};
+
 struct process_info {
     gint32 pid;
     gint32 host_pid;
@@ -20,12 +26,7 @@ struct process_info {
     const char *name;
     const char *exec_path;
     const char *command_line;
-};
-
-struct container_info {
-    const char *id;
-    const char *name;
-    const char *image;
+    struct container_info *container;
 };
 
 struct tracee_dissector_data {
@@ -36,7 +37,6 @@ struct tracee_dissector_data {
     const gchar *signature_name;
     tvbuff_t *packet_tvb;
     struct process_info *process;
-    struct container_info *container;
 };
 
 enum field_type {

@@ -3,12 +3,95 @@
 
 #include <epan/stats_tree.h>
 
-static void event_counts_stats_tree_init(stats_tree *st _U_)
+#if ((WIRESHARK_VERSION_MAJOR > 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR > 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO >= 1)))
+#define STATS_TREE_PACKET_HAS_FLAGS
+#endif
+
+#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
+#define STATS_TREE_NEW_API
+#endif
+
+#define STATS_TREE_INIT_FUNC_NAME(name) name##_stats_tree_init
+#define STATS_TREE_INIT_FUNC(name) static void STATS_TREE_INIT_FUNC_NAME(name)(stats_tree *st)
+
+#define STATS_TREE_CLEANUP_FUNC_NAME(name) name##_stats_tree_cleanup
+#define STATS_TREE_CLEANUP_FUNC(name) static void STATS_TREE_CLEANUP_FUNC_NAME(name)(stats_tree *st)
+
+#define STATS_TREE_PACKET_FUNC_NAME(name) name##_stats_tree_packet
+
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+#define STATS_TREE_PACKET_FUNC(name) static tap_packet_status STATS_TREE_PACKET_FUNC_NAME(name)(stats_tree *st, packet_info *pinfo, epan_dissect_t *edt, const void *p, tap_flags_t flags)
+#else /* !STATS_TREE_PACKET_HAS_FLAGS */
+#define STATS_TREE_PACKET_FUNC(name) static tap_packet_status STATS_TREE_PACKET_FUNC_NAME(name)(stats_tree *st, packet_info *pinfo, epan_dissect_t *edt , const void *p)
+#endif /* STATS_TREE_PACKET_HAS_FLAGS */
+
+#define STATS_TREE_PACKET_GLOBAL_FUNC(name)         STATS_TREE_PACKET_FUNC(name##_global)
+#define STATS_TREE_PACKET_PER_CONTAINER_FUNC(name)  STATS_TREE_PACKET_FUNC(name##_container)
+
+#define STATS_TREE_PACKET_GENERIC_FUNC_NAME(name) STATS_TREE_PACKET_FUNC_NAME(name##_generic)
+
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+
+#define STATS_TREE_PACKET_GENERIC_FUNC(name) static tap_packet_status STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(stats_tree *st, packet_info *pinfo, epan_dissect_t *edt , const void *p, tap_flags_t flags, bool per_container)
+
+#define STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(name)                                                                      \
+    STATS_TREE_PACKET_GLOBAL_FUNC(name) { return STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(st, pinfo, edt, p, flags, false); }          \
+    STATS_TREE_PACKET_PER_CONTAINER_FUNC(name) { return STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(st, pinfo, edt, p, flags, true); }
+
+#else /* !STATS_TREE_PACKET_HAS_FLAGS */
+
+#define STATS_TREE_PACKET_GENERIC_FUNC(name) static tap_packet_status STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(stats_tree *st, packet_info *pinfo, epan_dissect_t *edt , const void *p, bool per_container)
+
+#define STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(name)                                                              \
+    STATS_TREE_PACKET_GLOBAL_FUNC(name) { return STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(st, pinfo, edt, p, false); }         \
+    STATS_TREE_PACKET_PER_CONTAINER_FUNC(name) { return STATS_TREE_PACKET_GENERIC_FUNC_NAME(name)(st, pinfo, edt, p, true); }
+
+#endif /* STATS_TREE_PACKET_HAS_FLAGS */
+
+#ifdef STATS_TREE_NEW_API
+
+#define __REGISTER_STATS_TREE(name, menu_display, column_name, init_func, cleanup_func) \
+    stats_tree_cfg *name##_st = stats_tree_register_plugin("tracee", "tracee_" #name,   \
+        "Tracee" STATS_TREE_MENU_SEPARATOR menu_display, 0,                             \
+        STATS_TREE_PACKET_FUNC_NAME(name), init_func, cleanup_func);                    \
+    stats_tree_set_first_column_name(name##_st, column_name)
+
+#define __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name, init_func, cleanup_func)            \
+    __REGISTER_STATS_TREE(name##_global, menu_display STATS_TREE_MENU_SEPARATOR "Global", column_name, init_func, cleanup_func); \
+    __REGISTER_STATS_TREE(name##_container, menu_display STATS_TREE_MENU_SEPARATOR "Per Container", column_name, init_func, cleanup_func)
+
+#else /* !STATS_TREE_NEW_API */
+
+#define __REGISTER_STATS_TREE(name, menu_display, column_name, init_func, cleanup_func) \
+    stats_tree_register_plugin("tracee", "tracee_" #name, "Tracee/" menu_display, 0, STATS_TREE_PACKET_FUNC_NAME(name), init_func, cleanup_func)
+
+#define __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name, init_func, cleanup_func) \
+    __REGISTER_STATS_TREE(name##_global, menu_display " (global)", column_name, init_func, cleanup_func);           \
+    __REGISTER_STATS_TREE(name##_container, menu_display " (per container)", column_name, init_func, cleanup_func)
+
+#endif /* STATS_TREE_NEW_API */
+
+#define REGISTER_STATS_TREE(name, menu_display, column_name) \
+    __REGISTER_STATS_TREE(name, menu_display, column_name, STATS_TREE_INIT_FUNC_NAME(name), NULL)
+
+#define REGISTER_STATS_TREE_WITH_CLEANUP(name, menu_display, column_name) \
+    __REGISTER_STATS_TREE(name, menu_display, column_name, STATS_TREE_INIT_FUNC_NAME(name), STATS_TREE_CLEANUP_FUNC_NAME(name))
+
+#define REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name) \
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name, STATS_TREE_INIT_FUNC_NAME(name), NULL)
+
+#define REGISTER_STATS_TREE_WITH_CLEANUP_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name) \
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(name, menu_display, column_name, STATS_TREE_INIT_FUNC_NAME(name), STATS_TREE_CLEANUP_FUNC_NAME(name))
+
+#define UNUSED_PARAM(param) (void)param
+
+STATS_TREE_INIT_FUNC(event_counts)
 {
+    UNUSED_PARAM(st);
     return;
 }
 
-static const gchar *container_node_name(struct container_info *container)
+static const gchar *container_node_name(const struct container_info *container)
 {
     const gchar *node_name;
 
@@ -25,20 +108,26 @@ static const gchar *container_node_name(struct container_info *container)
     return node_name;
 }
 
-static tap_packet_status event_counts_stats_tree_packet(stats_tree *st, const void *p, bool per_container)
+STATS_TREE_PACKET_GENERIC_FUNC(event_counts)
 {
+    UNUSED_PARAM(pinfo);
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
     int node;
     const gchar *node_name;
 
     if (per_container) {
-        if (data->container == NULL) {
+        if (data->process->container == NULL) {
             node = tick_stat_node(st, "Host", 0, TRUE);
             // keep host on top
             stat_node_set_flags(st, "Host", 0, TRUE, ST_FLG_SORT_TOP);
         }
         else
-            node = tick_stat_node(st, container_node_name(data->container), 0, TRUE);
+            node = tick_stat_node(st, container_node_name(data->process->container), 0, TRUE);
     }
     else
         node = 0; // tree root
@@ -75,30 +164,11 @@ static tap_packet_status event_counts_stats_tree_packet(stats_tree *st, const vo
     return TAP_PACKET_REDRAW;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status event_counts_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status event_counts_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
-{
-    return event_counts_stats_tree_packet(st, p, false);
-}
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(event_counts)
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status event_counts_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status event_counts_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+STATS_TREE_INIT_FUNC(file_types)
 {
-    return event_counts_stats_tree_packet(st, p, true);
-}
-
-static void file_types_stats_tree_init(stats_tree *st _U_)
-{
+    UNUSED_PARAM(st);
     return;
 }
 
@@ -112,8 +182,14 @@ static const gchar *get_file_extension(const gchar *file_path)
     return g_strrstr(basename, ".");
 }
 
-static tap_packet_status file_types_stats_tree_packet(stats_tree *st, const void *p, bool per_container)
+STATS_TREE_PACKET_GENERIC_FUNC(file_types)
 {
+    UNUSED_PARAM(pinfo);
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
     const gchar *file_type, *pathname, *extension = NULL;
     int node;
@@ -123,13 +199,13 @@ static tap_packet_status file_types_stats_tree_packet(stats_tree *st, const void
         return TAP_PACKET_DONT_REDRAW;
     
     if (per_container) {
-        if (data->container == NULL) {
+        if (data->process->container == NULL) {
             node = tick_stat_node(st, "Host", 0, TRUE);
             // keep host on top
             stat_node_set_flags(st, "Host", 0, TRUE, ST_FLG_SORT_TOP);
         }
         else
-            node = tick_stat_node(st, container_node_name(data->container), 0, TRUE);
+            node = tick_stat_node(st, container_node_name(data->process->container), 0, TRUE);
     }
     else
         node = 0; // tree root
@@ -161,27 +237,7 @@ static tap_packet_status file_types_stats_tree_packet(stats_tree *st, const void
     return TAP_PACKET_REDRAW;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status file_types_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status file_types_global_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
-{
-    return file_types_stats_tree_packet(st, p, false);
-}
-
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status file_types_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status file_types_container_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
-{
-    return file_types_stats_tree_packet(st, p, true);
-}
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(file_types)
 
 struct process_stat_node {
     int id;
@@ -209,7 +265,7 @@ static void free_process_stat_node(gpointer data)
     g_free(node);
 }
 
-static void process_tree_stats_tree_init(stats_tree *st)
+STATS_TREE_INIT_FUNC(process_tree)
 {
     struct process_tree_stats_context *context;
 
@@ -287,52 +343,102 @@ static struct process_stat_node *process_tree_stats_tree_add_process(stats_tree 
     return node;
 }
 
-static struct process_stat_node *process_tree_stats_tree_add_process_and_ancestors(stats_tree *st, struct process_tree_stats_context *context, gint32 pid)
+static struct process_stat_node *process_tree_stats_tree_add_process_and_ancestors(stats_tree *st,
+    struct process_tree_stats_context *context, gint32 pid, bool per_container, const struct container_info *container)
 {
     struct process_info *parent;
+    const char *container_id = NULL, *parent_container_id = NULL;
     struct process_stat_node *parent_node = NULL;
+    const char *parent_node_name;
+    int parent_node_id;
 
-    if ((parent = process_tree_get_parent(pid)) != NULL)
-        parent_node = process_tree_stats_tree_add_process_and_ancestors(st, context, parent->host_pid);
+    if ((parent = process_tree_get_parent(pid)) != NULL) {
+        if (container != NULL)
+            container_id = container->id;
+        if (parent->container != NULL)
+            parent_container_id = parent->container->id;
+        
+        // make sure parent belongs to the same container
+        if (per_container) {
+            if (container_id != NULL && parent_container_id == NULL)
+                parent = NULL;
+            else if (container_id == NULL && parent_container_id != NULL)
+                parent = NULL;
+            else if (container_id != NULL && parent_container_id != NULL && strcmp(container_id, parent_container_id) != 0)
+                parent = NULL;
+        }
+
+        // not per-container or parent belongs to the same container
+        if (parent != NULL)
+            parent_node = process_tree_stats_tree_add_process_and_ancestors(st, context, parent->host_pid, per_container, container);
+    }
+
+    if (parent_node == NULL) {
+        if (per_container) {
+            parent_node_name = container == NULL ? "Host" : container_node_name(container);
+            if ((parent_node_id = stats_tree_parent_id_by_name(st, parent_node_name)) == 0) {
+                parent_node_id = stats_tree_create_node(st, parent_node_name, 0, STAT_DT_INT, TRUE);
+
+                // keep host on top
+                if (container == NULL)
+                    stat_node_set_flags(st, "Host", 0, TRUE, ST_FLG_SORT_TOP);
+            }
+        }
+        else
+            parent_node_id = 0;
+    }
+    else
+        parent_node_id = parent_node->id;
     
-    return process_tree_stats_tree_add_process(st, context, pid, parent_node == NULL ? 0 : parent_node->id);
+    return process_tree_stats_tree_add_process(st, context, pid, parent_node_id);
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status process_tree_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status process_tree_stats_tree_packet(stats_tree* st, packet_info* pinfo _U_,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree)
 {
+    UNUSED_PARAM(pinfo);
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct process_tree_stats_context *context;
     struct process_stat_node *node;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    struct process_info *process = NULL;
+    const struct container_info *container = NULL;
 
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
     if (data->process == NULL || data->process->host_pid == 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
+    // get container ID for per container view
+    if (per_container) {
+        if ((process = process_tree_get_process(data->process->host_pid)) != NULL)
+                container = process->container;
+    }
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid, per_container, container);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
 
     return TAP_PACKET_REDRAW;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree);
+
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_files)
 {
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct process_tree_stats_context *context;
     struct process_stat_node *node;
     const gchar *pathname, *file_type, *file_node_name;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    struct process_info *process = NULL;
+    const struct container_info *container = NULL;
 
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
@@ -343,7 +449,13 @@ static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* s
     if (strcmp(data->event_name, "magic_write") != 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
+    // get container ID for per container view
+    if (per_container) {
+        if ((process = process_tree_get_process(data->process->host_pid)) != NULL)
+                container = process->container;
+    }
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid, per_container, container);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
 
     DISSECTOR_ASSERT((pathname = wanted_field_get_str("tracee.args.magic_write.pathname")) != NULL);
@@ -355,18 +467,21 @@ static tap_packet_status process_tree_with_files_stats_tree_packet(stats_tree* s
     return TAP_PACKET_REDRAW;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_files)
+
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_network)
 {
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct process_tree_stats_context *context;
     struct process_stat_node *node;
     gchar *description;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    struct process_info *process = NULL;
+    const struct container_info *container = NULL;
 
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
 
@@ -381,7 +496,13 @@ static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree*
     else
         return TAP_PACKET_DONT_REDRAW;
     
-    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
+    // get container ID for per container view
+    if (per_container) {
+        if ((process = process_tree_get_process(data->process->host_pid)) != NULL)
+                container = process->container;
+    }
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid, per_container, container);
     
     if (description != NULL) {
         tick_stat_node(st, node->name, node->parent_id, TRUE);
@@ -391,17 +512,20 @@ static tap_packet_status process_tree_with_network_stats_tree_packet(stats_tree*
     return TAP_PACKET_REDRAW;
 }
 
-#if ((WIRESHARK_VERSION_MAJOR < 3) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR < 7)) || ((WIRESHARK_VERSION_MAJOR == 3) && (WIRESHARK_VERSION_MINOR == 7) && (WIRESHARK_VERSION_MICRO < 1)))
-static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p)
-#else
-static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tree* st, packet_info* pinfo,
-    epan_dissect_t* edt _U_, const void* p, tap_flags_t flags _U_)
-#endif
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_network)
+
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_signatures)
 {
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
     struct process_tree_stats_context *context;
     struct process_stat_node *node;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    struct process_info *process = NULL;
+    const struct container_info *container = NULL;
     gchar *node_name;
 
     DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
@@ -413,7 +537,13 @@ static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tr
     if (!data->is_signature || strcmp(data->event_name, "sig_process_execution") == 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid);
+    // get container ID for per container view
+    if (per_container) {
+        if ((process = process_tree_get_process(data->process->host_pid)) != NULL)
+                container = process->container;
+    }
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid, per_container, container);
     tick_stat_node(st, node->name, node->parent_id, TRUE);
 
     node_name = wmem_strdup_printf(pinfo->pool, "(Severity %d): %s", data->signature_severity, data->signature_name);
@@ -422,7 +552,9 @@ static tap_packet_status process_tree_with_signatures_stats_tree_packet(stats_tr
     return TAP_PACKET_REDRAW;
 }
 
-static void process_tree_stats_tree_cleanup(stats_tree *st)
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_signatures)
+
+STATS_TREE_CLEANUP_FUNC(process_tree)
 {
     struct process_tree_stats_context *context;
 
@@ -453,57 +585,30 @@ void register_tracee_statistics(void)
 
     stats_tree_context = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
 
-#if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3))) // new stats tree API
-    stats_tree_cfg *event_counts_global_st, *event_counts_container_st, *file_types_global_st, *file_types_container_st,
-        *process_tree_st, *process_tree_with_files_st, *process_tree_with_network_st, *process_tree_with_signatures_st;
+    REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(event_counts, "Event Counts", "Event Name");
+    REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(file_types, "File Types", "File Type");
 
-    event_counts_global_st = stats_tree_register_plugin("tracee", "tracee_events_global", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts" STATS_TREE_MENU_SEPARATOR "Global",
-        0, event_counts_global_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_set_first_column_name(event_counts_global_st, "Event Name");
+#ifdef STATS_TREE_NEW_API
 
-    event_counts_container_st = stats_tree_register_plugin("tracee", "tracee_events_container", "Tracee" STATS_TREE_MENU_SEPARATOR "Event Counts" STATS_TREE_MENU_SEPARATOR "Per Container",
-        0, event_counts_container_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_set_first_column_name(event_counts_container_st, "Event Name");
+#define PROCESS_TREE_MENU                 "Process Tree" STATS_TREE_MENU_SEPARATOR "Standard"
+#define PROCESS_TREE_WITH_FILES_MENU      "Process Tree" STATS_TREE_MENU_SEPARATOR "With Files"
+#define PROCESS_TREE_WITH_NETWORK_MENU    "Process Tree" STATS_TREE_MENU_SEPARATOR "With Network"
+#define PROCESS_TREE_WITH_SIGNATURES_MENU "Process Tree" STATS_TREE_MENU_SEPARATOR "With Signatures"
 
-    file_types_global_st = stats_tree_register_plugin("tracee", "tracee_file_types_global", "Tracee" STATS_TREE_MENU_SEPARATOR "File Types" STATS_TREE_MENU_SEPARATOR "Global",
-        0, file_types_global_stats_tree_packet, file_types_stats_tree_init, NULL);
-    stats_tree_set_first_column_name(file_types_global_st, "File Type");
+#else /* !STATS_TREE_NEW_API */
 
-    file_types_container_st = stats_tree_register_plugin("tracee", "tracee_file_types_container", "Tracee" STATS_TREE_MENU_SEPARATOR "File Types" STATS_TREE_MENU_SEPARATOR "Per Container",
-        0, file_types_container_stats_tree_packet, file_types_stats_tree_init, NULL);
-    stats_tree_set_first_column_name(file_types_container_st, "File Type");
+#define PROCESS_TREE_MENU                 "Process Tree"
+#define PROCESS_TREE_WITH_FILES_MENU      "Process Tree with files"
+#define PROCESS_TREE_WITH_NETWORK_MENU    "Process Tree with network"
+#define PROCESS_TREE_WITH_SIGNATURES_MENU "Process Tree with signatures"
 
-    process_tree_st = stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree",
-        0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_set_first_column_name(process_tree_st, "Process");
+#endif /* STATS_TREE_NEW_API */
 
-    process_tree_with_files_st = stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with files)",
-        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_set_first_column_name(process_tree_with_files_st, "Process/File");
-
-    process_tree_with_network_st = stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with network)",
-        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_set_first_column_name(process_tree_with_network_st, "Process/Network activity");
-
-    process_tree_with_signatures_st = stats_tree_register_plugin("tracee", "tracee_process_tree_signatures", "Tracee" STATS_TREE_MENU_SEPARATOR "Process Tree (with signatures)",
-        0, process_tree_with_signatures_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_set_first_column_name(process_tree_with_signatures_st, "Process/Signature");
-#else // old stats tree API
-    stats_tree_register_plugin("tracee", "tracee_events_global", "Tracee/Event Counts (global)",
-        0, event_counts_global_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_events_container", "Tracee/Event Counts (per container)",
-        0, event_counts_container_stats_tree_packet, event_counts_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_file_types_global", "Tracee/File Types (global)",
-        0, file_types_global_stats_tree_packet, file_types_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_file_types_container", "Tracee/File Types (per container)",
-        0, file_types_container_stats_tree_packet, file_types_stats_tree_init, NULL);
-    stats_tree_register_plugin("tracee", "tracee_process_tree", "Tracee/Process Tree",
-        0, process_tree_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_register_plugin("tracee", "tracee_process_tree_files", "Tracee/Process Tree (with files)",
-        0, process_tree_with_files_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_register_plugin("tracee", "tracee_process_tree_network", "Tracee/Process Tree (with network)",
-        0, process_tree_with_network_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-    stats_tree_register_plugin("tracee", "tracee_process_tree_signatures", "Tracee/Process Tree (with signatures)",
-        0, process_tree_with_signatures_stats_tree_packet, process_tree_stats_tree_init, process_tree_stats_tree_cleanup);
-#endif
+    REGISTER_STATS_TREE_WITH_CLEANUP_WITH_GLOBAL_AND_PER_CONTAINER(process_tree, PROCESS_TREE_MENU, "Process");
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_files, PROCESS_TREE_WITH_FILES_MENU,
+        "Process/File", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_network, PROCESS_TREE_WITH_NETWORK_MENU,
+        "Process/Network activity", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_signatures, PROCESS_TREE_WITH_SIGNATURES_MENU,
+        "Process/Signature", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
 }

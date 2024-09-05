@@ -16,6 +16,19 @@ void process_tree_init(void)
     register_wanted_field("tracee.args.sched_process_fork.child_tid");
 }
 
+static struct container_info *dup_container_info(const struct container_info *container)
+{
+    struct container_info *new_container = wmem_new0(wmem_file_scope(), struct container_info);
+    if (container->id != NULL)
+        new_container->id = wmem_strdup(wmem_file_scope(), container->id);
+    if (container->name != NULL)
+        new_container->name = wmem_strdup(wmem_file_scope(), container->name);
+    if (container->image != NULL)
+        new_container->image = wmem_strdup(wmem_file_scope(), container->image);
+    
+    return new_container;
+}
+
 void process_tree_update(struct tracee_dissector_data *data)
 {
     gint *fork_child_pid, *fork_child_tid;
@@ -49,6 +62,8 @@ void process_tree_update(struct tracee_dissector_data *data)
             process->exec_path = wmem_strdup(wmem_file_scope(), process->exec_path);
         if (process->command_line != NULL)
             process->command_line = wmem_strdup(wmem_file_scope(), process->command_line);
+        if (process->container != NULL)
+            process->container = dup_container_info(process->container);
         pid_key = wmem_new(wmem_file_scope(), gint);
         *pid_key = process->host_pid;
         wmem_map_insert(processes, pid_key, process);
@@ -64,6 +79,10 @@ void process_tree_update(struct tracee_dissector_data *data)
             process->exec_path = wmem_strdup(wmem_file_scope(), data->process->exec_path);
             process->command_line = wmem_strdup(wmem_file_scope(), data->process->command_line);
         }
+
+        // update the container info if it didn't have any already
+        if (process->container == NULL && data->process->container != NULL)
+            process->container = dup_container_info(data->process->container);
     }
 }
 
