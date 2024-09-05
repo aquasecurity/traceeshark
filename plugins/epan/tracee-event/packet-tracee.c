@@ -1013,7 +1013,7 @@ static gchar *do_dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
         }
         // sometimes and IPv4 address appears in the sin6_addr field, ignore these
         else
-            ws_info("error decoding ipv6 addr %s", tmp_str);
+            ws_info("frame %u: error decoding ipv6 address \"%s\"", pinfo->num, tmp_str);
     }
     
     // get sin6_port
@@ -1392,7 +1392,7 @@ static gchar *dissect_http_headers(tvbuff_t *tvb, packet_info *pinfo, proto_tree
             else if (strcmp(header_name, "Upgrade") == 0)
                 header_hf = hf_http_upgrade;
             else
-                ws_info("unknown HTTP header \"%s\"", header_name);
+                ws_info("frame %u: unknown HTTP header \"%s\"", pinfo->num, header_name);
             
             if (header_hf != -1) {
                 tmp_item = proto_tree_add_string_wanted(headers_tree, header_hf, tvb, 0, 0, header_value);
@@ -2444,6 +2444,19 @@ static void init_string_types(void) {
     add_string_type("struct utsname*");
     add_string_type("struct clone_args*");
     add_string_type("unsigned long*");
+    add_string_type("const struct rlimit*");
+    add_string_type("struct open_how*");
+    add_string_type("off_t*");
+    add_string_type("struct siginfo*");
+    add_string_type("struct timeval*");
+    add_string_type("struct rlimit*");
+    add_string_type("cap_user_header_t");
+    add_string_type("const cap_user_data_t");
+    add_string_type("cap_user_data_t");
+    add_string_type("gid_t*");
+    add_string_type("struct file_operations *");
+    add_string_type("union bpf_attr*");
+    add_string_type("struct perf_event_attr*");
 }
 
 static void add_supported_type(const gchar *type, complex_arg_dissector_t dissector)
@@ -2479,19 +2492,9 @@ static void init_complex_types(void) {
     // add unsupported types (these are types that were encountered but aren't dissected yet)
     add_unsupported_type("trace.ProtoTCP");
     add_unsupported_type("trace.ProtoUDP");
-    add_unsupported_type("struct file_operations *");
     add_unsupported_type("trace.ProtoDNS");
     add_unsupported_type("struct linux_dirent*");
-    add_unsupported_type("struct rlimit*");
-    add_unsupported_type("union bpf_attr*");
-    add_unsupported_type("struct perf_event_attr*");
-    add_unsupported_type("cap_user_header_t");
-    add_unsupported_type("const cap_user_data_t");
-    add_unsupported_type("cap_user_data_t");
     add_unsupported_type("trace.ProtoICMP");
-    add_unsupported_type("struct timeval*");
-    add_unsupported_type("struct siginfo*");
-    add_unsupported_type("gid_t*");
     add_unsupported_type("trace.ProtoIPv4");
     add_unsupported_type("trace.ProtoHTTPResponse");
     add_unsupported_type("trace.ProtoICMPv6");
