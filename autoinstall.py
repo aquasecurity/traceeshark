@@ -26,7 +26,7 @@ def get_system_info() -> Tuple[str, str]:
     if platform.machine() in ["AMD64", "x86_64"]:
         arch = "x86_64"
     elif platform.machine() in ["arm64", "aarch64"]:
-        arch = "arm64"
+        arch = platform.machine()
     else:
         raise ValueError(f"incompatible architecture {platform.machine()}")
     

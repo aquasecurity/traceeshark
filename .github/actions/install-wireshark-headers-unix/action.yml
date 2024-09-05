@@ -5,7 +5,11 @@ runs:
     - name: Configure Wireshark
       run: |
         mkdir wireshark/build
-        cmake -G Ninja -B wireshark/build -S wireshark -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -DDISABLE_WERROR=OFF
+        if [ "$WERROR" = "n" ]; then
+          cmake -G Ninja -B wireshark/build -S wireshark -DENABLE_CCACHE=Yes -DENABLE_WERROR=OFF -DDISABLE_WERROR=ON $TRACEESHARK_CMAKE_OPTIONS
+        else
+          cmake -G Ninja -B wireshark/build -S wireshark -DENABLE_CCACHE=Yes -DENABLE_WERROR=ON -DDISABLE_WERROR=OFF $TRACEESHARK_CMAKE_OPTIONS
+        fi
       shell: bash
     - name: Install headers
       id: install_headers
