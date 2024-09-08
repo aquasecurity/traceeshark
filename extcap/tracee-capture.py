@@ -44,6 +44,7 @@ LOCAL_CAPTURE_INSTALL_PATH = os.path.join(TMP_DIR, 'tracee_tmp')
 REMOTE_CAPTURE_INSTALL_PATH = '/tmp/tracee_tmp'
 REMOTE_CAPTURE_OUTPUT_DIR = '/tmp/tracee_output'
 REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
+NEW_ENTRYPOINT_SCRIPT_NAME = 'new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
 PID_FILE = os.path.join(TMP_DIR, "traceeshark.pid")
 
@@ -890,7 +891,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
     logfile = args.logfile if local else REMOTE_CAPTURE_LOGFILE
     install_path = LOCAL_CAPTURE_INSTALL_PATH if local else REMOTE_CAPTURE_INSTALL_PATH
     output_dir = args.output_dir if local else REMOTE_CAPTURE_OUTPUT_DIR
-    new_entrypoint = os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh') if local else REMOTE_CAPTURE_NEW_ENTRYPOINT
+    new_entrypoint = os.path.join(os.path.dirname(__file__), 'tracee-capture', NEW_ENTRYPOINT_SCRIPT_NAME) if local else REMOTE_CAPTURE_NEW_ENTRYPOINT
     command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {install_path}:/install_path:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
@@ -1055,7 +1056,7 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         error(f'error creating output directory for Tracee, stderr dump:\n{err}')
     
     # copy new container entrypoint
-    sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', 'new-entrypoint.sh'), REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', NEW_ENTRYPOINT_SCRIPT_NAME), REMOTE_CAPTURE_NEW_ENTRYPOINT)
     _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
     if returncode != 0:
         error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
