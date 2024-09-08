@@ -228,7 +228,7 @@ def get_presets() -> List[str]:
     os.makedirs(presets_dir, exist_ok=True)
 
     presets = []
-    for filename in os.listdir(presets_dir):
+    for filename in sorted(os.listdir(presets_dir)):
         presets.append(filename)
     
     return presets
