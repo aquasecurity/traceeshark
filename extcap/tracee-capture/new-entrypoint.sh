@@ -2,13 +2,13 @@
 
 handler()
 {
-    kill -s SIGINT $PID
+    kill -s INT $PID
 }
 
 /tracee/entrypoint.sh $@ &
 PID=$!
 
-trap handler SIGINT SIGTERM
+trap handler INT TERM
 wait $PID
 
 chmod -R g+w /output
