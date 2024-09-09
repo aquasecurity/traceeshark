@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import BinaryIO, Dict, Iterator, List, NoReturn, Optional, Tuple
+from typing import BinaryIO, Callable, Dict, Iterator, List, NoReturn, Optional, Tuple, Union
 
 import argparse
 import ctypes
@@ -47,6 +47,8 @@ REMOTE_CAPTURE_NEW_ENTRYPOINT = '/tmp/new-entrypoint.sh'
 NEW_ENTRYPOINT_SCRIPT_NAME = 'new-entrypoint.sh'
 READER_COMM = 'tracee-capture'
 PID_FILE = os.path.join(TMP_DIR, "traceeshark.pid")
+
+PRE_CAPTURE_CALLBACKS: List[Callable[[argparse.Namespace, bool, Optional[paramiko.SSHClient], Optional['SFTPManager']], bool]] = []
 
 GENERAL_GROUP = 'General'
 REMOTE_GROUP = 'Remote capture'
@@ -262,6 +264,11 @@ def show_config(reload_option: Optional[str]):
         ConfigArg(call='--docker-options', display='Docker options', type='string',
             tooltip='Command line options for docker',
             default=DEFAULT_DOCKER_OPTIONS,
+            group=GENERAL_GROUP
+        ),
+        ConfigArg(call='--filter-capture-processes', display='Filter capture processes', type='boolflag',
+            tooltip='Filter out capture related processes',
+            default='true',
             group=GENERAL_GROUP
         ),
         ConfigArg(call='--remote-host', display='SSH server address', type='string',
@@ -655,6 +662,18 @@ class SFTPManager:
                 "size mismatch in get!  {} != {}".format(s.st_size, size_copied)
             )
     
+    def read_file(self, remotepath: str, binary: bool = False) -> Union[str, bytes]:
+        mode = "rb" if binary else "r"
+        with self._lock:
+            with self._sftp_client.open(remotepath, mode) as f:
+                return f.read()
+    
+    def write_file(self, remotepath: str, data: Union[str, bytes], binary: bool = False):
+        mode = "wb" if binary else "w"
+        with self._lock:
+            with self._sftp_client.open(remotepath, mode) as f:
+                f.write(data)
+    
     def listdir(self, *args, **kwargs):
         with self._lock:
             return self._sftp_client.listdir(*args, **kwargs)
@@ -780,7 +799,7 @@ def toolbar_thread(control_inf: BinaryIO, control_output_manager: ControlOutputM
         exception(ex)
 
 
-def sample_tracee_init(sftp: Optional[SFTPManager]):
+def poll_tracee_init(sftp: Optional[SFTPManager]):
     global local
 
     stat = os.stat if local else sftp.stat
@@ -798,24 +817,29 @@ def sample_tracee_init(sftp: Optional[SFTPManager]):
         time.sleep(0.5)
 
 
-def tracee_init_sampler_thread(sftp: Optional[SFTPManager]):
+def tracee_init_polling_thread(sftp: Optional[SFTPManager]):
     try:
-        sample_tracee_init(sftp)
+        poll_tracee_init(sftp)
     except Exception as ex:
         exception(ex)
 
 
-def send_local_command(command: str) -> Tuple[str, str, int]:
+def send_local_command(command: str, input: Optional[str] = None) -> Tuple[str, str, int]:
     if WINDOWS:
-        proc = subp.Popen(['cmd.exe', '/C', command], stdout=subp.PIPE, stderr=subp.PIPE)
+        args = ['cmd.exe', '/C', command]
     else:
-        proc = subp.Popen(['/bin/sh', '-c', command], stdout=subp.PIPE, stderr=subp.PIPE)
-    out, err = proc.communicate()
+        args = ['/bin/sh', '-c', command]
+    proc = subp.Popen(args, stdout=subp.PIPE, stderr=subp.PIPE)
+    out, err = proc.communicate(input=input)
     return out.decode(), err.decode(), proc.returncode
 
 
-def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str, int]:
-    _, stdout, stderr = client.exec_command(command)
+def send_ssh_command(client: paramiko.SSHClient, command: str, input: Optional[str] = None) -> Tuple[str, str, int]:
+    stdin, stdout, stderr = client.exec_command(command)
+
+    if input is not None:
+        stdin.write(input)
+        stdin.channel.shutdown_write()
 
     stdout_lines = stdout.readlines() # this waits until command finishes
     stderr_lines = stderr.readlines()
@@ -823,14 +847,14 @@ def send_ssh_command(client: paramiko.SSHClient, command: str) -> Tuple[str, str
     return ''.join(stdout_lines), ''.join(stderr_lines), stdout.channel.recv_exit_status()
 
 
-def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = None) -> Tuple[str, str, int]:
+def send_command(local: bool, command: str, ssh_client: paramiko.SSHClient = None, input: Optional[str] = None) -> Tuple[str, str, int]:
     if local:
-        return send_local_command(command)
+        return send_local_command(command, input)
     
     if ssh_client is None:
         raise ValueError('no SSH client provided')
     
-    return send_ssh_command(ssh_client, command)
+    return send_ssh_command(ssh_client, command, input)
 
 
 def log(msg: str):
@@ -895,15 +919,16 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
     command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {install_path}:/install_path:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
-    if sshd_pid is not None:
-        command += f' --scope pid!={sshd_pid}'
-    
-    if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
-        command += f' --scope comm!=tracee'
+    if args.filter_capture_processes:
+        if sshd_pid is not None:
+            command += f' --scope pid!={sshd_pid}'
+        
+        if 'comm=' not in tracee_options: # make sure there is no comm filter in place, otherwise it will be overriden
+            command += f' --scope comm!=tracee'
 
-        # these exclusions are needed only when Wireshark is running on the same host that is being recorded
-        if local and LINUX:
-            command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
+            # these exclusions are needed only when Wireshark is running on the same host that is being recorded
+            if local and LINUX:
+                command += f' --scope comm!="{READER_COMM}" --scope comm!=wireshark --scope comm!=dumpcap'
     
     command += f' --output forward:tcp://{data_addr}:{DATA_PORT} --log file:/logs.log --install-path /install_path --capture dir:/output --capture clear-dir --capabilities add=cap_dac_override'
 
@@ -1056,6 +1081,10 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         error(f'error creating output directory for Tracee, stderr dump:\n{err}')
     
     # copy new container entrypoint
+    try:
+        sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+    except FileNotFoundError:
+        pass
     sftp.put(os.path.join(os.path.dirname(__file__), 'tracee-capture', NEW_ENTRYPOINT_SCRIPT_NAME), REMOTE_CAPTURE_NEW_ENTRYPOINT)
     _, err, returncode = send_ssh_command(ssh_client, f"chmod +x {REMOTE_CAPTURE_NEW_ENTRYPOINT}")
     if returncode != 0:
@@ -1153,6 +1182,21 @@ def tracee_capture(args: argparse.Namespace):
     if not running:
         return
     
+    for callback in PRE_CAPTURE_CALLBACKS:
+        log(f"Running pre-capture callback {callback.__name__}...")
+        try:
+            ok = callback(args, local, ssh_client, sftp)
+        except Exception as ex:
+            exception(ex)
+        else:
+            if not ok:
+                error(f"Pre-capture callback {callback.__name__} failed, aborting...")
+        
+        # checkpoint
+        if not running:
+            return
+
+    
     # start toolbar control thread
     control_th = threading.Thread(target=toolbar_thread, args=(control_inf, control_output_manager, args.output_dir, sftp), daemon=True)
     control_th.start()
@@ -1208,8 +1252,8 @@ def tracee_capture(args: argparse.Namespace):
     container_id = out.rstrip('\n')
 
     # monitor for tracee.pid file to know when Tracee is running
-    tracee_init_sampler_th = threading.Thread(target=tracee_init_sampler_thread, args=(sftp,), daemon=True)
-    tracee_init_sampler_th.start()
+    tracee_init_polling_th = threading.Thread(target=tracee_init_polling_thread, args=(sftp,), daemon=True)
+    tracee_init_polling_th.start()
 
     # wait until Tracee exits (triggered by stop_capture or by an error)
     command = f'docker wait {container_id}'
@@ -1224,6 +1268,9 @@ def tracee_capture(args: argparse.Namespace):
         sftp.get(REMOTE_CAPTURE_LOGFILE, args.logfile)
         sftp.remove(REMOTE_CAPTURE_LOGFILE)
         sftp.remove(REMOTE_CAPTURE_NEW_ENTRYPOINT)
+        _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_INSTALL_PATH}")
+        if returncode != 0:
+            error(f'error removing temp tracee directory from remote machine, stderr dump:\n{err}')
 
         if copy_output:
             control_output_manager.disable_button(CTRL_ARG_COPY_OUTPUT)
@@ -1234,6 +1281,10 @@ def tracee_capture(args: argparse.Namespace):
             _, err, returncode = send_ssh_command(ssh_client, f"rm -rf {REMOTE_CAPTURE_OUTPUT_DIR}")
             if returncode != 0:
                 error(f'error removing output directory from remote machine, stderr dump:\n{err}')
+    else:
+        _, err, returncode = send_local_command(f"rm -rf {LOCAL_CAPTURE_INSTALL_PATH}")
+        if returncode != 0:
+            error(f'error removing temp tracee directory, stderr dump:\n{err}')
     
     # the capture has been stopped because of an error condition,
     # so the stop_capture function already removed the container
@@ -1286,6 +1337,7 @@ def main():
     parser.add_argument('--container-image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--container-name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
+    parser.add_argument('--filter-capture-processes', action='store_true', default=False)
     parser.add_argument('--remote-host', type=str),
     parser.add_argument('--remote-port', type=int, default=22),
     parser.add_argument('--ssh-username', type=str)
