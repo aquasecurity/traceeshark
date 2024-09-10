@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.5
+
+**Added:**
+
+- Releases for Linux ARM64
+
+- Statistics:
+  
+  - File Types 
+  
+  - Add per-container view to all existing statistics
+
+- Enhanced file type detection for `magic_write`
+
+- Support for more special argument datatypes
+
+**Changed:**
+
+- Live capture: increase modularity
+
+**Fixed:**
+
+- Live capture bugfixes
+
 ## v0.3.4
 
 **Added:**
