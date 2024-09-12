@@ -13,6 +13,12 @@ import urllib.request
 import zipfile
 
 
+def removesuffix(text: str, suffix: str) -> str:
+    if text.endswith(suffix):
+        return text[:-len(suffix)]
+    return text
+
+
 def get_system_info() -> Tuple[str, str]:
     if sys.platform.startswith("linux"):
         os_ = "linux"
@@ -85,7 +91,7 @@ def is_candidate_asset(asset: str, os_: str, arch: str) -> bool:
 
 
 def release_wireshark_version(release_name: str) -> str:
-    return release_name.removesuffix(".zip").split("-")[5]
+    return removesuffix(release_name, ".zip").split("-")[5]
 
 
 def prompt_selected_asset(assets: Dict[str, str], wireshark_version: Optional[str]) -> Optional[str]:
@@ -173,7 +179,7 @@ def main():
     download_asset(assets[selected_asset], selected_asset)
 
     print(f"Extracting {selected_asset} ...")
-    release_dir = selected_asset.removesuffix(".zip")
+    release_dir = removesuffix(selected_asset, ".zip")
     os.makedirs(release_dir, exist_ok=True)
     with zipfile.ZipFile(selected_asset, "r") as zip:
         zip.extractall(release_dir)
