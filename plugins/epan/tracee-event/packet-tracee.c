@@ -60,7 +60,19 @@ static int hf_matched_policies = -1;
 static int hf_args_num = -1;
 static int hf_return_value = -1;
 static int hf_syscall = -1;
-//static int hf_stack_addresses = -1;
+static int hf_stack_trace_status_success = -1;
+static int hf_stack_trace_status_user_error_name = -1;
+static int hf_stack_trace_status_user_error_desc = -1;
+static int hf_stack_trace_status_kernel_error_name = -1;
+static int hf_stack_trace_status_kernel_error_desc = -1;
+static int hf_stack_trace_frame_type = -1;
+static int hf_stack_trace_frame_address = -1;
+static int hf_stack_trace_frame_file = -1;
+static int hf_stack_trace_frame_file_address = -1;
+static int hf_stack_trace_frame_symbol_name = -1;
+static int hf_stack_trace_frame_symbol_offset = -1;
+static int hf_stack_trace_frame_module_name = -1;
+static int hf_stack_trace_frame_module_offset = -1;
 //CONTEXT FLAFS INFO
 static int hf_thread_entity_id = -1;
 static int hf_process_entity_id = -1;
@@ -214,6 +226,11 @@ static gint ett_context = -1;
 static gint ett_process = -1;
 static gint ett_container = -1;
 static gint ett_k8s = -1;
+static gint ett_stack_trace = -1;
+static gint ett_stack_trace_status = -1;
+static gint ett_stack_trace_status_error = -1;
+static gint ett_stack_trace_frames = -1;
+static gint ett_stack_trace_frame = -1;
 static gint ett_metadata = -1;
 static gint ett_metadata_properties = -1;
 static gint ett_args = -1;
@@ -560,6 +577,256 @@ static void dissect_event_context(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
 
     // add k8s fields
     dissect_k8s_fields(tvb, context_tree, json_data, root_tok);
+}
+
+static void dissect_stack_frame_kernel(tvbuff_t *tvb, packet_info *pinfo, proto_tree *frame_tree,
+    gchar *json_data, jsmntok_t *frame_data_tok, char **short_repr, char **long_repr)
+{
+    guint64 addr, symbol_offset, module_offset;
+    char *symbol_name, *module_name;
+
+    // add address
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "address", &addr));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_address, tvb, 0, 0, addr);
+
+    // add symbol name
+    DISSECTOR_ASSERT((symbol_name = json_get_string(json_data, frame_data_tok, "symbolName")) != NULL);
+    if (strlen(symbol_name) == 0)
+        symbol_name = NULL;
+    proto_tree_add_string(frame_tree, hf_stack_trace_frame_symbol_name, tvb, 0, 0, symbol_name != NULL ? symbol_name : "<none>");
+    
+    // add symbol offset
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "symbolOffset", &symbol_offset));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_symbol_offset, tvb, 0, 0, symbol_offset);
+
+    // add module name
+    DISSECTOR_ASSERT((module_name = json_get_string(json_data, frame_data_tok, "moduleName")) != NULL);
+    if (strlen(module_name) == 0)
+        module_name = NULL;
+    proto_tree_add_string(frame_tree, hf_stack_trace_frame_module_name, tvb, 0, 0, module_name != NULL ? module_name : "<none>");
+    
+    // add module offset
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "moduleOffset", &module_offset));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_module_offset, tvb, 0, 0, module_offset);
+
+    // generate short repr
+    if (module_name != NULL)
+        *short_repr = wmem_strdup_printf(pinfo->pool, "kernel (%s)", module_name);
+    else
+        *short_repr = "kernel (no module)";
+    
+    // generate long repr
+    *long_repr = wmem_strdup_printf(pinfo-> pool, "%s%s",
+        symbol_name != NULL ?
+            wmem_strdup_printf(pinfo->pool, "%s+0x%lx", symbol_name, symbol_offset) : 
+            wmem_strdup_printf(pinfo->pool, "0x%lx", addr),
+        module_name != NULL ?
+            wmem_strdup_printf(pinfo->pool, " [%s]", module_name) :
+            ""
+    );
+}
+
+static void dissect_stack_frame_native(tvbuff_t *tvb, packet_info *pinfo, proto_tree *frame_tree,
+    gchar *json_data, jsmntok_t *frame_data_tok, char **short_repr, char **long_repr)
+{
+    guint64 addr, file_addr, symbol_offset;
+    char *file, *symbol_name, *file_basename = NULL;
+
+    // add address
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "address", &addr));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_address, tvb, 0, 0, addr);
+
+    // add file
+    DISSECTOR_ASSERT((file = json_get_string(json_data, frame_data_tok, "file")) != NULL);
+    if (strlen(file) == 0)
+        file = NULL;
+    proto_tree_add_string(frame_tree, hf_stack_trace_frame_file, tvb, 0, 0, file != NULL ? file : "<none>");
+
+    // add file address
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "fileAddress", &file_addr));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_file_address, tvb, 0, 0, file_addr);
+
+    // add symbol name
+    DISSECTOR_ASSERT((symbol_name = json_get_string(json_data, frame_data_tok, "symbolName")) != NULL);
+    if (strlen(symbol_name) == 0)
+        symbol_name = NULL;
+    proto_tree_add_string(frame_tree, hf_stack_trace_frame_symbol_name, tvb, 0, 0, symbol_name != NULL ? symbol_name : "<none>");
+    
+    // add symbol offset
+    DISSECTOR_ASSERT(json_get_int(json_data, frame_data_tok, "symbolOffset", &symbol_offset));
+    proto_tree_add_uint64(frame_tree, hf_stack_trace_frame_symbol_offset, tvb, 0, 0, symbol_offset);
+
+    // generate short repr
+    if (file != NULL) {
+        file_basename = g_path_get_basename(file);
+        *short_repr = wmem_strdup(pinfo->pool, file_basename);
+        g_free(file_basename);
+    }
+    else
+        *short_repr = NULL;
+
+    // generate long repr    
+    *long_repr = wmem_strdup_printf(pinfo-> pool, "%s%s",
+        symbol_name != NULL ?
+            wmem_strdup_printf(pinfo->pool, "%s+0x%lx", symbol_name, symbol_offset) : 
+            wmem_strdup_printf(pinfo->pool, "0x%lx", file_addr),
+        file != NULL ?
+            wmem_strdup_printf(pinfo->pool, " [%s]", file) :
+            ""
+    );
+}
+
+static char *dissect_stack_frame(tvbuff_t *tvb, packet_info *pinfo, proto_tree *stack_frames_tree, gchar *json_data, jsmntok_t *frame_tok)
+{
+    proto_item *frame_item;
+    proto_tree *frame_tree;
+    char *frame_type, *short_repr = NULL, *long_repr = NULL;
+    jsmntok_t *data_tok;
+
+    frame_item = proto_tree_add_item(stack_frames_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    frame_tree = proto_item_add_subtree(frame_item, ett_stack_trace_frame);
+
+    // add frame type
+    DISSECTOR_ASSERT((frame_type = json_get_string(json_data, frame_tok, "type")) != NULL);
+    proto_tree_add_string(frame_tree, hf_stack_trace_frame_type, tvb, 0, 0, frame_type);
+    proto_item_set_text(frame_item, "%s", frame_type);
+
+    // get data oject and dissect it according to type
+    DISSECTOR_ASSERT((data_tok = json_get_object(json_data, frame_tok, "data")) != NULL);
+    if (strcmp(frame_type, "Kernel") == 0)
+        dissect_stack_frame_kernel(tvb, pinfo, frame_tree, json_data, data_tok, &short_repr, &long_repr);
+    else if (strcmp(frame_type, "Native") == 0)
+        dissect_stack_frame_native(tvb, pinfo, frame_tree, json_data, data_tok, &short_repr, &long_repr);
+    else
+        ws_warning("unrecognzied stack frame type %s in packet %u", frame_type, pinfo->num);
+    
+    if (long_repr != NULL)
+        proto_item_append_text(frame_item, ": %s", long_repr);
+    
+    return short_repr;
+}
+
+static char *dissect_stack_frames(tvbuff_t *tvb, packet_info *pinfo, proto_tree *stack_frames_tree, gchar *json_data, jsmntok_t *frames_arr_tok)
+{
+    jsmntok_t *frame_tok;
+    int arr_len, i;
+    char *frame_repr, *prev_frame_repr = NULL, *trace_repr = NULL;
+
+    if ((arr_len = json_get_array_len(frames_arr_tok)) == 0)
+        return NULL;
+    
+    // go through all stack frames and dissect them
+    for (i = 0; i < arr_len; i++) {
+        DISSECTOR_ASSERT((frame_tok = json_get_array_index(frames_arr_tok, i)) != NULL);
+        frame_repr = dissect_stack_frame(tvb, pinfo, stack_frames_tree, json_data, frame_tok);
+        if (frame_repr == NULL)
+            continue;
+        
+        if (prev_frame_repr != NULL && strcmp(frame_repr, prev_frame_repr) == 0)
+            continue;
+        
+        if (trace_repr == NULL)
+            trace_repr = frame_repr;
+        else
+            trace_repr = wmem_strdup_printf(pinfo->pool, "%s -> %s", trace_repr, frame_repr);
+        
+        prev_frame_repr = frame_repr;
+    }
+
+    return trace_repr;
+}
+
+static char *dissect_stack_trace_error(tvbuff_t *tvb, proto_tree *tree, gchar *json_data, jsmntok_t *stack_trace_tok, bool user)
+{
+    proto_item *err_item;
+    proto_tree *err_tree;
+    jsmntok_t *err_tok;
+    char *err_name, *tmp_str;
+
+    err_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(err_item, user ? "User Stack Error" : "Kernel Stack Error");
+    err_tree = proto_item_add_subtree(err_item, ett_stack_trace_status_error);
+
+    // get error object
+    DISSECTOR_ASSERT((err_tok = json_get_object(json_data, stack_trace_tok, user ? "userStackError" : "kernelStackError")) != NULL);
+
+    // add error name
+    DISSECTOR_ASSERT((err_name = json_get_string(json_data, err_tok, "errorName")) != NULL);
+    proto_tree_add_string(err_tree, user ? hf_stack_trace_status_user_error_name : hf_stack_trace_status_kernel_error_name, tvb, 0, 0, err_name);
+    proto_item_append_text(err_item, ": %s", err_name);
+
+    // add error description
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, err_tok, "errorDesc")) != NULL);
+    proto_tree_add_string(err_tree, user ? hf_stack_trace_status_user_error_desc : hf_stack_trace_status_kernel_error_desc, tvb, 0, 0, tmp_str);
+
+    return err_name;
+}
+
+static void dissect_stack_trace(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gchar *json_data, jsmntok_t *root_tok)
+{
+    proto_item *stack_trace_item, *stack_trace_status_item, *tmp_item;
+    proto_tree *stack_trace_tree, *stack_trace_status_tree, *tmp_tree;
+    jsmntok_t *stack_trace_tok, *tmp_tok;
+    char *user_err, *kernel_err, *status_desc = NULL, *trace_repr = NULL, *tmp_str;
+    bool success;
+
+    // get stack trace object
+    if ((stack_trace_tok = json_get_object(json_data, root_tok, "stackTrace")) == NULL)
+        return;
+    
+    stack_trace_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(stack_trace_item, "Stack Trace");
+    stack_trace_tree = proto_item_add_subtree(stack_trace_item, ett_stack_trace);
+
+    stack_trace_status_item = proto_tree_add_item(stack_trace_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(stack_trace_status_item, "Status");
+    stack_trace_status_tree = proto_item_add_subtree(stack_trace_status_item, ett_stack_trace_status);
+
+    // add user stack error
+    user_err = dissect_stack_trace_error(tvb, stack_trace_status_tree, json_data, stack_trace_tok, true);
+
+    // add kernel stack error
+    kernel_err = dissect_stack_trace_error(tvb, stack_trace_status_tree, json_data, stack_trace_tok, false);
+
+    // add success/failure indication
+    if (strcmp(user_err, "ERR_OK") != 0)
+        status_desc = "user stack failure";
+    if (strcmp(kernel_err, "ERR_OK") != 0) {
+        if (status_desc == NULL)
+            status_desc = "kernel stack failure";
+        else
+            status_desc = wmem_strdup_printf(pinfo->pool, "%s, kernel stack failure", status_desc);
+    }
+    if (status_desc == NULL) {
+        status_desc = "success";
+        success = true;
+    }
+    else
+        success = false;
+    proto_item_append_text(stack_trace_status_item, ": %s", status_desc);
+    tmp_item = proto_tree_add_boolean(stack_trace_status_tree, hf_stack_trace_status_success, tvb, 0, 0, success);
+    proto_item_set_generated(tmp_item);
+
+    // add user stack frames
+    tmp_item = proto_tree_add_item(stack_trace_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(tmp_item, "User Frames");
+    tmp_tree = proto_item_add_subtree(tmp_item, ett_stack_trace_frames);
+    DISSECTOR_ASSERT((tmp_tok = json_get_array(json_data, stack_trace_tok, "userFrames")) != NULL);
+    trace_repr = dissect_stack_frames(tvb, pinfo, tmp_tree, json_data, tmp_tok);
+
+    // add kernel stack frames
+    tmp_item = proto_tree_add_item(stack_trace_tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(tmp_item, "Kernel Frames");
+    tmp_tree = proto_item_add_subtree(tmp_item, ett_stack_trace_frames);
+    DISSECTOR_ASSERT((tmp_tok = json_get_array(json_data, stack_trace_tok, "kernelFrames")) != NULL);
+    tmp_str = dissect_stack_frames(tvb, pinfo, tmp_tree, json_data, tmp_tok);
+    if (trace_repr == NULL)
+        trace_repr = tmp_str;
+    else
+        trace_repr = wmem_strdup_printf(pinfo->pool, "%s -> %s", trace_repr, tmp_str);
+
+    if (trace_repr != NULL)
+        proto_item_append_text(stack_trace_item, ": %s", trace_repr);
 }
 
 struct type_display {
@@ -2429,6 +2696,9 @@ static void dissect_event_fields(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     // add syscall
     DISSECTOR_ASSERT((syscall = json_get_string(json_data, root_tok, "syscall")) != NULL);
     proto_tree_add_string(tree, hf_syscall, tvb, 0, 0, syscall);
+
+    // add stack trace
+    dissect_stack_trace(tvb, pinfo, tree, json_data, root_tok);
     
     // add arguments
     dissect_arguments(tvb, pinfo, tree, json_data, root_tok, data->event_name, TRUE, data);
@@ -2599,6 +2869,11 @@ void proto_register_tracee(void)
         &ett_process,
         &ett_container,
         &ett_k8s,
+        &ett_stack_trace,
+        &ett_stack_trace_status,
+        &ett_stack_trace_status_error,
+        &ett_stack_trace_frames,
+        &ett_stack_trace_frame,
         &ett_metadata,
         &ett_metadata_properties,
         &ett_args,
@@ -2785,6 +3060,71 @@ void proto_register_tracee(void)
           { "Syscall", "tracee.syscall",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Originating syscall", HFILL }
+        },
+        { &hf_stack_trace_status_success,
+          { "Success", "tracee.stack_trace.status.success",
+            FT_BOOLEAN, BASE_NONE, NULL, 0,
+            "Stack trace completed successfully", HFILL }
+        },
+        { &hf_stack_trace_status_user_error_name,
+          { "Error Name", "tracee.stack_trace.status.user.error_name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "User stack trace error name", HFILL }
+        },
+        { &hf_stack_trace_status_user_error_desc,
+          { "Error Description", "tracee.stack_trace.status.user.error_desc",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "User stack trace error description", HFILL }
+        },
+        { &hf_stack_trace_status_kernel_error_name,
+          { "Error Name", "tracee.stack_trace.status.kernel.error_name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Kernel stack trace error name", HFILL }
+        },
+        { &hf_stack_trace_status_kernel_error_desc,
+          { "Error Description", "tracee.stack_trace.status.kernel.error_desc",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Kernel stack unwinding error description", HFILL }
+        },
+        { &hf_stack_trace_frame_type,
+          { "Type", "tracee.stack_trace.frame.type",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Stack frame type", HFILL }
+        },
+        { &hf_stack_trace_frame_address,
+          { "Address", "tracee.stack_trace.frame.address",
+            FT_UINT64, BASE_HEX, NULL, 0,
+            "Call site address", HFILL }
+        },
+        { &hf_stack_trace_frame_file,
+          { "File", "tracee.stack_trace.frame.file",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "File path", HFILL }
+        },
+        { &hf_stack_trace_frame_file_address,
+          { "File Address", "tracee.stack_trace.frame.file_address",
+            FT_UINT64, BASE_HEX, NULL, 0,
+            "Call site address (relative to executable file)", HFILL }
+        },
+        { &hf_stack_trace_frame_symbol_name,
+          { "Symbol Name", "tracee.stack_trace.frame.symbol_name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Call site symbol name", HFILL }
+        },
+        { &hf_stack_trace_frame_symbol_offset,
+          { "Symbol Offset", "tracee.stack_trace.frame.symbol_offset",
+            FT_UINT64, BASE_HEX, NULL, 0,
+            "Offset from call site symbol", HFILL }
+        },
+        { &hf_stack_trace_frame_module_name,
+          { "Module Name", "tracee.stack_trace.frame.module_name",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            "Call site module name", HFILL }
+        },
+        { &hf_stack_trace_frame_module_offset,
+          { "Module Offset", "tracee.stack_trace.frame.module_offset",
+            FT_UINT64, BASE_HEX, NULL, 0,
+            "Offset from call site module", HFILL }
         },
         { &hf_thread_entity_id,
           { "Thread Entity ID", "tracee.threadEntityId",
