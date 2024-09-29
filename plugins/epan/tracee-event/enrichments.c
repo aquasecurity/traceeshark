@@ -8,11 +8,12 @@ static int hf_file_type = -1;
 
 static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data)
 {
-    const gchar *pathname, *cmdline;
+    const gchar *pathname, *cmdline, *prev_comm;
     struct tracee_dissector_data *dissector_data = (struct tracee_dissector_data *)data;
 
     pathname = wanted_field_get_str("tracee.args.sched_process_exec.pathname");
     cmdline = wanted_field_get_str("tracee.args.command_line");
+    prev_comm = wanted_field_get_str("tracee.args.sched_process_exec.prev_comm");
 
     dissector_data->process->exec_path = pathname;
     dissector_data->process->command_line = cmdline;
@@ -23,6 +24,9 @@ static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, prot
         else
             col_add_fstr(pinfo->cinfo, COL_INFO, "%s: %s", pathname, cmdline);
     }
+
+    if (prev_comm)
+        col_prepend_fstr(pinfo->cinfo, COL_INFO, "(%s) -> ", prev_comm);
 
     return 0;
 }
@@ -465,6 +469,7 @@ static void register_wanted_fields(void)
     // needed for enrich_sched_process_exec
     register_wanted_field("tracee.args.sched_process_exec.pathname");
     register_wanted_field("tracee.args.command_line");
+    register_wanted_field("tracee.args.sched_process_exec.prev_comm");
 
     // needed for enrich_net_packet_http_request
     register_wanted_field("tracee.proto_http_request.method");
