@@ -1091,11 +1091,15 @@ def prepare_remote_capture(args: argparse.Namespace, ssh_client: paramiko.SSHCli
         error(f'error changing permissions on new entrypoint script, stderr dump:\n{err}')
     
     # get pid of sshd responsible for the ssh tunnel (it constantly polls its sockets which may spam the capture)
-    out, err, returncode = send_ssh_command(ssh_data_client, "echo $PPID")
+    out, err, returncode = send_ssh_command(ssh_data_client, f'ps -o ppid= -p $$')
     if returncode != 0:
-        error(f'error getting sshd pid, stderr dump:\n{err}')
+        # fish doesn't have $$
+        if err.startswith('fish:'):
+            out, err, returncode = send_ssh_command(ssh_data_client, f'ps -o ppid= -p $fish_pid')
+        if returncode != 0:
+            error(f'error getting sshd pid, stderr dump:\n{err}')
     
-    return int(out)
+    return int(out.lstrip())
 
 
 def stop_existing_tracee_capture():
