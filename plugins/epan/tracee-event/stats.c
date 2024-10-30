@@ -480,6 +480,7 @@ STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_network)
     struct process_stat_node *node;
     gchar *description;
     struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    const gchar *family, *sun_path;
     struct process_info *process = NULL;
     const struct container_info *container = NULL;
 
@@ -488,7 +489,19 @@ STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_network)
     if (data->process == NULL || data->process->host_pid == 0)
         return TAP_PACKET_DONT_REDRAW;
     
-    // we only care about connect, bind and accept events
+    // ignore unix sockets if requested
+    if ((family = wanted_field_get_str("tracee.sockaddr.sa_family")) != NULL && strcmp(family, "AF_UNIX") == 0) {
+        if (!preferences_include_unix_sockets)
+            return TAP_PACKET_DONT_REDRAW;
+        
+        // ignore /var/run/nscd/socket if requested
+        if (preferences_exclude_nscd_socket
+            && (sun_path = wanted_field_get_str("tracee.sockaddr.sun_path")) != NULL
+            && strcmp(sun_path, "/var/run/nscd/socket") == 0)
+            return TAP_PACKET_DONT_REDRAW;
+    }
+    
+    // we only care about connect and bind events
     if (strcmp(data->event_name, "security_socket_connect") == 0)
         description = enrichments_get_security_socket_bind_connect_description(pinfo, "Connect");
     else if (strcmp(data->event_name, "security_socket_bind") == 0)

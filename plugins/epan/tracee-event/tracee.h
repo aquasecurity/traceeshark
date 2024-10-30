@@ -8,8 +8,12 @@ extern gint preferences_pid_format;
 extern gint preferences_container_identifier;
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
 extern bool preferences_show_container_image;
+extern bool preferences_include_unix_sockets;
+extern bool preferences_exclude_nscd_socket;
 #else
 extern gboolean preferences_show_container_image;
+extern gboolean preferences_include_unix_sockets;
+extern gboolean preferences_exclude_nscd_socket;
 #endif
 
 struct container_info {
