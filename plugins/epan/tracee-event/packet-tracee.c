@@ -232,8 +232,12 @@ gint preferences_pid_format = PID_FORMAT_CONTAINER_ONLY;
 gint preferences_container_identifier = CONTAINER_IDENTIFIER_ID;
 #if ((WIRESHARK_VERSION_MAJOR > 4) || ((WIRESHARK_VERSION_MAJOR == 4) && (WIRESHARK_VERSION_MINOR >= 3)))
 bool preferences_show_container_image = FALSE;
+bool preferences_include_unix_sockets = TRUE;
+bool preferences_exclude_nscd_socket = FALSE;
 #else
 gboolean preferences_show_container_image = FALSE;
+gboolean preferences_include_unix_sockets = TRUE;
+gboolean preferences_exclude_nscd_socket = FALSE;
 #endif
 
 struct event_dynamic_hf {
@@ -3370,6 +3374,12 @@ void proto_register_tracee(void)
     
     prefs_register_bool_preference(tracee_module, "container_image", "Show container image",
         "Whether to show the container image in the container column", &preferences_show_container_image);
+    
+    prefs_register_bool_preference(tracee_module, "include_unix_sockets", "Include Unix sockets in network stats",
+        "Whether to include unix sockets in network stats views (like process tree with network)", &preferences_include_unix_sockets);
+    
+    prefs_register_bool_preference(tracee_module, "exclude_nscd_socket", "Exclude NSCD socket in network stats",
+        "Whether to exclude the NSCD unix socket (/var/run/nscd/socket) from network stats views (if unix sockets are included)", &preferences_exclude_nscd_socket);
     
     tracee_tap = register_tap("tracee");
 
