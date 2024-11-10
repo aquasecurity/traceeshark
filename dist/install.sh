@@ -22,16 +22,12 @@ cp -r profiles/Tracee $HOME/.config/wireshark/profiles/
 echo "[*] Installed profile to $HOME/.config/wireshark/profiles/Tracee"
 
 WS_VERSION_SHORT=$(echo $WS_VERSION_WANTED | grep -o -E "[0-9]+\.[0-9]+")
-if [[ $WS_VERSION_SHORT < "4.3" ]]; then
-    if [ "$OS_NAME" == "Linux" ]; then
-        WS_VERSION_DIR=$WS_VERSION_SHORT
-    else
-        WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
-    fi
-    PLUGINS_DIR="$HOME/.local/lib/wireshark/plugins/$WS_VERSION_DIR"
+if [ "$OS_NAME" == "Linux" ]; then
+    WS_VERSION_DIR=$WS_VERSION_SHORT
 else
-    PLUGINS_DIR="$HOME/.local/lib/wireshark/plugins"
+    WS_VERSION_DIR=${WS_VERSION_SHORT//./-}
 fi
+PLUGINS_DIR="$HOME/.local/lib/wireshark/plugins/$WS_VERSION_DIR"
 
 mkdir -p $PLUGINS_DIR/epan
 cp tracee-event.so* $PLUGINS_DIR/epan
