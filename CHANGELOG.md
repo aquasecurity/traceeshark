@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.6
+
+**Added:**
+
+- Enrichments: `prev_comm` field was added to `sched_process_exec` description
+
+- Stats: added preferences for filtering unix sockets in process tree with network
+
+**Changed:**
+
+- Live capture: default docker image was changed to v0.22.2
+
+- Releases are now built for Wireshark 4.4.1 instead of 4.4.0
+
+**Fixed:**
+
+- Installation script fixes
+
+- Remote capture: remove reliance on `$PPID` variable that doesn't exist in some shells
+
 ## v0.3.5
 
 **Added:**
