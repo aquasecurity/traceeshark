@@ -426,7 +426,58 @@ STATS_TREE_PACKET_GENERIC_FUNC(process_tree)
 
 STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree);
 
-STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_files)
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_opened_files)
+{
+    UNUSED_PARAM(edt);
+#ifdef STATS_TREE_PACKET_HAS_FLAGS
+    UNUSED_PARAM(flags);
+#endif
+
+    struct process_tree_stats_context *context;
+    struct process_stat_node *node;
+    const gchar *pathname, *open_flags, *mode = "", *node_name;
+    struct tracee_dissector_data *data = (struct tracee_dissector_data *)p;
+    struct process_info *process = NULL;
+    const struct container_info *container = NULL;
+
+    DISSECTOR_ASSERT((context = g_hash_table_lookup(stats_tree_context, &st)) != NULL);
+
+    if (data->process == NULL || data->process->host_pid == 0)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    // we only care about security_file_open events
+    if (strcmp(data->event_name, "security_file_open") != 0)
+        return TAP_PACKET_DONT_REDRAW;
+    
+    // get container ID for per container view
+    if (per_container) {
+        if ((process = process_tree_get_process(data->process->host_pid)) != NULL)
+                container = process->container;
+    }
+    
+    node = process_tree_stats_tree_add_process_and_ancestors(st, context, data->process->host_pid, per_container, container);
+    tick_stat_node(st, node->name, node->parent_id, TRUE);
+
+    DISSECTOR_ASSERT((pathname = wanted_field_get_str("tracee.args.security_file_open.pathname")) != NULL);
+
+    if ((open_flags = wanted_field_get_str("tracee.args.security_file_open.flags")) != NULL) {
+        if (strstr(open_flags, "O_RDONLY") != NULL)
+            mode = "RO";
+        else if (strstr(open_flags, "O_WRONLY") != NULL)
+            mode = "WO";
+        else if (strstr(open_flags, "O_RDWR") != NULL)
+            mode = "RW";
+    }
+    
+    node_name = wmem_strdup_printf(pinfo->pool, "(%s): %s", mode, pathname);
+    tick_stat_node(st, node_name, node->id, FALSE);
+
+    return TAP_PACKET_REDRAW;
+}
+
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_opened_files)
+
+STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_written_files)
 {
     UNUSED_PARAM(edt);
 #ifdef STATS_TREE_PACKET_HAS_FLAGS
@@ -467,7 +518,7 @@ STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_files)
     return TAP_PACKET_REDRAW;
 }
 
-STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_files)
+STATS_TREE_PACKET_FUNC_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_written_files)
 
 STATS_TREE_PACKET_GENERIC_FUNC(process_tree_with_network)
 {
@@ -584,7 +635,11 @@ void register_tracee_statistics(void)
     register_wanted_field("tracee.args.magic_write.file_type");
     register_wanted_field("tracee.args.magic_write.pathname");
 
-    // needed for process tree with files
+    // needed for process tree with opened files
+    register_wanted_field("tracee.args.security_file_open.pathname");
+    register_wanted_field("tracee.args.security_file_open.flags");
+
+    // needed for process tree with written files
     register_wanted_field("tracee.args.magic_write.pathname");
     register_wanted_field("tracee.args.magic_write.file_type");
 
@@ -603,22 +658,26 @@ void register_tracee_statistics(void)
 
 #ifdef STATS_TREE_NEW_API
 
-#define PROCESS_TREE_MENU                 "Process Tree" STATS_TREE_MENU_SEPARATOR "Standard"
-#define PROCESS_TREE_WITH_FILES_MENU      "Process Tree" STATS_TREE_MENU_SEPARATOR "With Files"
-#define PROCESS_TREE_WITH_NETWORK_MENU    "Process Tree" STATS_TREE_MENU_SEPARATOR "With Network"
-#define PROCESS_TREE_WITH_SIGNATURES_MENU "Process Tree" STATS_TREE_MENU_SEPARATOR "With Signatures"
+#define PROCESS_TREE_MENU                    "Process Tree" STATS_TREE_MENU_SEPARATOR "Standard"
+#define PROCESS_TREE_WITH_OPENED_FILES_MENU  "Process Tree" STATS_TREE_MENU_SEPARATOR "With Opened Files"
+#define PROCESS_TREE_WITH_WRITTEN_FILES_MENU "Process Tree" STATS_TREE_MENU_SEPARATOR "With Written Files"
+#define PROCESS_TREE_WITH_NETWORK_MENU       "Process Tree" STATS_TREE_MENU_SEPARATOR "With Network"
+#define PROCESS_TREE_WITH_SIGNATURES_MENU    "Process Tree" STATS_TREE_MENU_SEPARATOR "With Signatures"
 
 #else /* !STATS_TREE_NEW_API */
 
-#define PROCESS_TREE_MENU                 "Process Tree"
-#define PROCESS_TREE_WITH_FILES_MENU      "Process Tree with files"
-#define PROCESS_TREE_WITH_NETWORK_MENU    "Process Tree with network"
-#define PROCESS_TREE_WITH_SIGNATURES_MENU "Process Tree with signatures"
+#define PROCESS_TREE_MENU                    "Process Tree"
+#define PROCESS_TREE_WITH_OPENED_FILES_MENU  "Process Tree with opened files"
+#define PROCESS_TREE_WITH_WRITTEN_FILES_MENU "Process Tree with written files"
+#define PROCESS_TREE_WITH_NETWORK_MENU       "Process Tree with network"
+#define PROCESS_TREE_WITH_SIGNATURES_MENU    "Process Tree with signatures"
 
 #endif /* STATS_TREE_NEW_API */
 
     REGISTER_STATS_TREE_WITH_CLEANUP_WITH_GLOBAL_AND_PER_CONTAINER(process_tree, PROCESS_TREE_MENU, "Process");
-    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_files, PROCESS_TREE_WITH_FILES_MENU,
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_opened_files, PROCESS_TREE_WITH_OPENED_FILES_MENU,
+        "Process/File", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
+    __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_written_files, PROCESS_TREE_WITH_WRITTEN_FILES_MENU,
         "Process/File", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
     __REGISTER_STATS_TREE_WITH_GLOBAL_AND_PER_CONTAINER(process_tree_with_network, PROCESS_TREE_WITH_NETWORK_MENU,
         "Process/Network activity", STATS_TREE_INIT_FUNC_NAME(process_tree), STATS_TREE_CLEANUP_FUNC_NAME(process_tree));
