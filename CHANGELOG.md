@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.7
+
+**Added:**
+
+* Stats: added process tree with opened files
+
+**Changed:**
+
+* Stats: renamed process tree with files to process tree with written files
+
+* Releases are now built for Wireshark 4.4.3 instead of 4.4.1
+
 ## v0.3.6
 
 **Added:**
