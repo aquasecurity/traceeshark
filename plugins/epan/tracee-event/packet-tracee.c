@@ -1607,6 +1607,7 @@ static gchar *dissect_object_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     proto_tree *obj_tree;
     jsmntok_t *obj_tok;
     gchar *arg_str;
+    gint64 val;
 
     // create object subtree
     obj_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
@@ -1615,8 +1616,8 @@ static gchar *dissect_object_arg(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 
     // try getting object
     if ((obj_tok = json_get_object(json_data, arg_tok, "value")) == NULL) {
-        // couldn't get object - try getting a null
-        DISSECTOR_ASSERT(json_get_null(json_data, arg_tok, "value"));
+        // couldn't get object - try getting a null or 0
+        DISSECTOR_ASSERT(json_get_null(json_data, arg_tok, "value") || (json_get_int(json_data, arg_tok, "value", &val) && val == 0));
         proto_item_append_text(obj_item, ": (null)");
         return NULL;
     }
