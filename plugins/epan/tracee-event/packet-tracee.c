@@ -772,12 +772,14 @@ static void do_dissect_string_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_
     }
 }
 
-static void do_dissect_int_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_id,
-    const gchar *arr_name, gchar *json_data, jsmntok_t *arr_tok, wmem_array_t *arr_data)
+static void do_dissect_int_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_id, const gchar *arr_name,
+    gchar *json_data, jsmntok_t *arr_tok, wmem_array_t *arr_data, bool is_signed)
 {
-    int i, arr_len, val;
+    int i, arr_len;
     jsmntok_t *elem_tok;
     proto_item *tmp_item;
+    long long val_signed;
+    unsigned long long val_unsigned;
 
     // get array length
     DISSECTOR_ASSERT((arr_len = json_get_array_len(arr_tok)) >= 0);
@@ -793,13 +795,24 @@ static void do_dissect_int_array(tvbuff_t *tvb, proto_tree *arr_tree, int hf_id,
         // get the value
         json_data[elem_tok->end] = '\0';
         errno = 0;
-        val = (gint32)strtoll(&json_data[elem_tok->start], NULL, 10);
+        if (is_signed)
+            val_signed = strtoll(&json_data[elem_tok->start], NULL, 10);
+        else
+            val_unsigned = strtoull(&json_data[elem_tok->start], NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
-        if (arr_data != NULL)
-            wmem_array_append_one(arr_data, val);
+
+        if (arr_data != NULL) {
+            if (is_signed)
+                wmem_array_append_one(arr_data, val_signed);
+            else
+                wmem_array_append_one(arr_data, val_unsigned);
+        }
 
         // add the value to the dissection tree
-        tmp_item = proto_tree_add_int_wanted(arr_tree, hf_id, tvb, 0, 0, val);
+        if (is_signed)
+            tmp_item = proto_tree_add_int64_wanted(arr_tree, hf_id, tvb, 0, 0, val_signed);
+        else
+            tmp_item = proto_tree_add_uint64_wanted(arr_tree, hf_id, tvb, 0, 0, val_unsigned);
         proto_item_set_text(tmp_item, "%s[%d]: %s", arr_name, i, proto_item_get_display_repr(wmem_packet_scope(), tmp_item));
     }
 }
@@ -843,8 +856,9 @@ static wmem_array_t *add_string_array(tvbuff_t *tvb, proto_tree *tree, int hf_id
     return arr_data;
 }
 
-static wmem_array_t *add_int_array(tvbuff_t *tvb, proto_tree *tree, int hf_id, const gchar *item_name,
-    const gchar *arr_name, gchar *json_data, jsmntok_t *parent_tok, const gchar *arr_tok_name, gboolean get_data)
+static wmem_array_t *add_int_array(tvbuff_t *tvb, proto_tree *tree, int hf_id,
+    const gchar *item_name, const gchar *arr_name, gchar *json_data, jsmntok_t *parent_tok,
+    const gchar *arr_tok_name, bool is_signed, bool get_data)
 {
     proto_item *arr_item;
     proto_tree *arr_tree;
@@ -875,9 +889,9 @@ static wmem_array_t *add_int_array(tvbuff_t *tvb, proto_tree *tree, int hf_id, c
     arr_tree = proto_item_add_subtree(arr_item, ett_int_arr);
     
     if (get_data)
-        arr_data = wmem_array_sized_new(wmem_packet_scope(), sizeof(int), arr_len);
+        arr_data = wmem_array_sized_new(wmem_packet_scope(), sizeof(long long), arr_len);
 
-    do_dissect_int_array(tvb, arr_tree, hf_id, arr_name, json_data, arr_tok, arr_data);
+    do_dissect_int_array(tvb, arr_tree, hf_id, arr_name, json_data, arr_tok, arr_data, is_signed);
 
     return arr_data;
 }
@@ -1877,28 +1891,48 @@ static gchar *dissect_string_array(tvbuff_t *tvb, packet_info *pinfo,
     return str;
 }
 
-static gchar *dissect_int_array(tvbuff_t *tvb, packet_info *pinfo,
-    proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+static gchar *dissect_int_array(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+    hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok, bool is_signed)
 {
     wmem_array_t *arr;
     unsigned int i;
     gchar *str = NULL;
 
     // change field type to int, as it was registered as FT_NONE
-    hf->hfinfo.type = FT_INT32;
+    hf->hfinfo.type = is_signed ? FT_INT64 : FT_UINT64;
 
-    if ((arr = add_int_array(tvb, tree, *(hf->p_id), hf->hfinfo.name, hf->hfinfo.name, json_data, arg_tok, "value", TRUE)) != NULL) {
+    if ((arr = add_int_array(tvb, tree, *(hf->p_id), hf->hfinfo.name, hf->hfinfo.name, json_data, arg_tok, "value", is_signed, true)) != NULL) {
         for (i = 0; i < wmem_array_get_count(arr); i++) {
-            if (str == NULL)
-                str = wmem_strdup_printf(pinfo->pool, "%d", *(int *)wmem_array_index(arr, i));
-            else
-                str = wmem_strdup_printf(pinfo->pool, "%s, %d", str, *(int *)wmem_array_index(arr, i));
+            if (str == NULL) {
+                if (is_signed)
+                    str = wmem_strdup_printf(pinfo->pool, "%lld", *(long long *)wmem_array_index(arr, i));
+                else
+                    str = wmem_strdup_printf(pinfo->pool, "%llu", *(unsigned long long *)wmem_array_index(arr, i));
+            }
+            else {
+                if (is_signed)
+                    str = wmem_strdup_printf(pinfo->pool, "%s, %lld", str, *(long long *)wmem_array_index(arr, i));
+                else
+                    str = wmem_strdup_printf(pinfo->pool, "%s, %llu", str, *(unsigned long long *)wmem_array_index(arr, i));
+            }
         }
     }
 
     str = wmem_strdup_printf(pinfo->pool, "[%s]", str == NULL ? "" : str);
 
     return str;
+}
+
+static gchar *dissect_signed_int_array(tvbuff_t *tvb, packet_info *pinfo,
+    proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_int_array(tvb, pinfo, tree, hf, json_data, arg_tok, true);
+}
+
+static gchar *dissect_unsigned_int_array(tvbuff_t *tvb, packet_info *pinfo,
+    proto_tree *tree, hf_register_info *hf, gchar *json_data, jsmntok_t *arg_tok)
+{
+    return dissect_int_array(tvb, pinfo, tree, hf, json_data, arg_tok, false);
 }
 
 static gchar *dissect_sockaddr(tvbuff_t *tvb, packet_info *pinfo,
@@ -2492,7 +2526,8 @@ static void init_complex_types(void) {
     add_supported_type("map[string]trace.HookedSymbolData", dissect_hooked_symbol_data_map);
     add_supported_type("[]trace.HookedSymbolData", dissect_hooked_symbol_data_arr);
     add_supported_type("[]trace.DnsResponseData", dissect_dns_response_data);
-    add_supported_type("int[2]", dissect_int_array);
+    add_supported_type("int[2]", dissect_signed_int_array);
+    add_supported_type("unsigned long[]", dissect_unsigned_int_array);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
     add_unsupported_type("trace.ProtoTCP");
