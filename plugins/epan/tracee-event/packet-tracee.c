@@ -568,8 +568,8 @@ struct type_display {
 
 static gchar *normalize_arg_name(const gchar *name)
 {
-    // replace spaces with underscores
-    return g_strdelimit(g_strdup(name), " ", '_');
+    // replace spaces and parenthesis with underscores
+    return g_strdelimit(g_strdup(name), " ()", '_');
 }
 
 /**
