@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.8
+
+**Changed:**
+
+- Releases are now built for Wireshark 4.4.5 instead of 4.4.3
+
+**Fixed:**
+
+- Dissection fixes
+
 ## v0.3.7
 
 **Added:**
