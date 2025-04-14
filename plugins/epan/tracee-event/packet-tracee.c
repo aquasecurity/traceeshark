@@ -73,6 +73,7 @@ static int hf_process_lineage_process_name = -1;
 static int hf_process_lineage_pathname = -1;
 static int hf_process_lineage_sha256 = -1;
 static int hf_process_lineage_command = -1;
+static int hf_root_cause_origin = -1;
 static int hf_tiggered_by_id = -1;
 static int hf_tiggered_by_name = -1;
 static int hf_tiggered_by_return_value = -1;
@@ -220,6 +221,7 @@ static gint ett_string_arr = -1;
 static gint ett_int_arr = -1;
 static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
+static gint ett_root_cause = -1;
 static gint ett_triggered_by = -1;
 static gint ett_arg_obj = -1;
 static gint ett_arg_obj_arr = -1;
@@ -1826,6 +1828,35 @@ static void dissect_process_lineage(tvbuff_t *tvb,
         proto_item_append_text(process_lineage_item, ": %d entries", arr_len);
 }
 
+static void dissect_root_cause(tvbuff_t *tvb,
+    proto_tree *tree, gchar *json_data, jsmntok_t *arg_tok)
+{
+    proto_item *root_cause_item;
+    proto_tree *root_cause_tree;
+    jsmntok_t *root_cause_tok;
+    gchar *origin;
+
+    // place root cause outside of args tree
+    tree = proto_tree_get_parent_tree(tree);
+
+    // create root cause subtree
+    root_cause_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(root_cause_item, "Root Cause");
+    root_cause_tree = proto_item_add_subtree(root_cause_item, ett_root_cause);
+
+    // get root cause object
+    DISSECTOR_ASSERT((root_cause_tok = json_get_object(json_data, arg_tok, "value")) != NULL);
+    
+    // add origin field
+    DISSECTOR_ASSERT((origin = json_get_string(json_data, root_cause_tok, "origin")) != NULL);
+    proto_tree_add_string(root_cause_tree, hf_root_cause_origin, tvb, 0, 0, origin);
+
+    // add origin to root cause tree name
+    if (strcmp(origin, "") == 0)
+        origin = "none";
+    proto_item_append_text(root_cause_item, ": %s", origin);
+}
+
 /**
  * Callback function for dissecting a complex arg type.
  * 
@@ -1854,6 +1885,8 @@ static gchar *dissect_unknown_arg(tvbuff_t *tvb, packet_info *pinfo _U_,
 
     if (strcmp(hf->hfinfo.name, "Process lineage") == 0)
         dissect_process_lineage(tvb, tree, json_data, arg_tok);
+    else if (strcmp(hf->hfinfo.name, "rootCause") == 0)
+        dissect_root_cause(tvb, tree, json_data, arg_tok);
     else {
         ws_info("cannot dissect arg \"%s\" of type \"unknown\"", hf->hfinfo.name);
         tmp_item = proto_tree_add_item(tree, *(hf->p_id), tvb, 0, 0, ENC_NA);
@@ -2557,6 +2590,7 @@ void proto_register_tracee(void)
         &ett_int_arr,
         &ett_process_lineage,
         &ett_process_lineage_process,
+        &ett_root_cause,
         &ett_triggered_by,
         &ett_arg_obj,
         &ett_arg_obj_arr,
@@ -2791,6 +2825,11 @@ void proto_register_tracee(void)
             FT_STRINGZ, BASE_NONE, NULL, 0,
             "Process command line", HFILL }
         },
+        { &hf_root_cause_origin,
+            { "Origin", "tracee.root_cause.origin",
+              FT_STRINGZ, BASE_NONE, NULL, 0,
+              NULL, HFILL }
+          },
         { &hf_tiggered_by_id,
           { "Event ID", "tracee.triggered_by.id",
             FT_INT64, BASE_DEC, NULL, 0,
