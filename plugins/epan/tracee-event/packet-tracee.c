@@ -594,7 +594,8 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     }
 
     // u8
-    else if (strcmp(type, "u8") == 0) {
+    else if (strcmp(type, "u8")    == 0 ||
+             strcmp(type, "uint8") == 0) {
         info->type = FT_UINT8;
         info->display = BASE_DEC;
     }
