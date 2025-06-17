@@ -266,7 +266,7 @@ def show_config(reload_option: Optional[str]):
             default=DEFAULT_DOCKER_OPTIONS,
             group=GENERAL_GROUP
         ),
-        ConfigArg(call='--filter-capture-processes', display='Filter capture processes', type='boolflag',
+        ConfigArg(call='--filter-capture-processes', display='Filter capture processes', type='boolean',
             tooltip='Filter out capture related processes',
             default='true',
             group=GENERAL_GROUP
@@ -919,7 +919,7 @@ def build_docker_run_command(args: argparse.Namespace, local: bool, sshd_pid: Op
     command += f' {args.docker_options} -v {logfile}:/logs.log:rw -v {install_path}:/install_path:rw -v {output_dir}:/output:rw -v {new_entrypoint}:/new-entrypoint.sh --entrypoint /new-entrypoint.sh {args.container_image} {tracee_options}'
 
     # add exclusions that may spam the capture
-    if args.filter_capture_processes:
+    if args.filter_capture_processes == 'true':
         if sshd_pid is not None:
             command += f' --scope pid!={sshd_pid}'
         
@@ -1341,7 +1341,7 @@ def main():
     parser.add_argument('--container-image', type=str, default=DEFAULT_TRACEE_IMAGE)
     parser.add_argument('--container-name', type=str, default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--docker-options', type=str, default=DEFAULT_DOCKER_OPTIONS)
-    parser.add_argument('--filter-capture-processes', action='store_true', default=False)
+    parser.add_argument('--filter-capture-processes', type=str, default='true')
     parser.add_argument('--remote-host', type=str),
     parser.add_argument('--remote-port', type=int, default=22),
     parser.add_argument('--ssh-username', type=str)
