@@ -601,17 +601,19 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     }
 
     // u16
-    else if (strcmp(type, "umode_t")    == 0 ||
-             strcmp(type, "u16")        == 0) {
+    else if (strcmp(type, "umode_t") == 0 ||
+             strcmp(type, "u16")     == 0 ||
+             strcmp(type, "uint16")  == 0) {
         
         info->type = FT_UINT16;
         info->display = BASE_DEC;
     }
 
     // s32
-    else if (strcmp(type, "int")    == 0 ||
-             strcmp(type, "pid_t")  == 0 ||
-             strcmp(type, "const clockid_t") == 0) {
+    else if (strcmp(type, "int")             == 0 ||
+             strcmp(type, "pid_t")           == 0 ||
+             strcmp(type, "const clockid_t") == 0 ||
+             strcmp(type, "int32")           == 0) {
         
         info->type = FT_INT32;
         info->display = BASE_DEC;
@@ -619,36 +621,40 @@ static void get_arg_field_type_display(const gchar *type, struct type_display *i
     }
 
     // u32
-    else if (strcmp(type, "dev_t")          == 0 ||
-             strcmp(type, "u32")            == 0 ||
-             strcmp(type, "unsigned int")   == 0 ||
-             strcmp(type, "mode_t")         == 0 ||
-             strcmp(type, "uid_t")          == 0 ||
-             strcmp(type, "gid_t")          == 0) {
+    else if (strcmp(type, "dev_t")        == 0 ||
+             strcmp(type, "u32")          == 0 ||
+             strcmp(type, "unsigned int") == 0 ||
+             strcmp(type, "mode_t")       == 0 ||
+             strcmp(type, "uid_t")        == 0 ||
+             strcmp(type, "gid_t")        == 0 ||
+             strcmp(type, "uint32")       == 0) {
         
         info->type = FT_UINT32;
         info->display = BASE_DEC;
     }
 
     // s64
-    else if (strcmp(type, "long")   == 0 ||
-             strcmp(type, "off_t")  == 0) {
+    else if (strcmp(type, "long")  == 0 ||
+             strcmp(type, "off_t") == 0 ||
+             strcmp(type, "int64") == 0) {
         
         info->type = FT_INT64;
         info->display = BASE_DEC;
     }
 
     // u64
-    else if (strcmp(type, "unsigned long")  == 0 ||
-             strcmp(type, "u64")            == 0 ||
-             strcmp(type, "size_t")         == 0) {
+    else if (strcmp(type, "unsigned long") == 0 ||
+             strcmp(type, "u64")           == 0 ||
+             strcmp(type, "size_t")        == 0 ||
+             strcmp(type, "uint64")        == 0) {
         
         info->type = FT_UINT64;
         info->display = BASE_DEC;
     }
 
     // double
-    else if (strcmp(type, "struct timespec*") == 0) {
+    else if (strcmp(type, "struct timespec*") == 0 ||
+             strcmp(type, "float64")          == 0) {
         info->type = FT_DOUBLE;
         info->display = BASE_NONE;
     }
@@ -2532,6 +2538,8 @@ static void init_string_types(void) {
     add_string_type("struct file_operations *");
     add_string_type("union bpf_attr*");
     add_string_type("struct perf_event_attr*");
+    add_string_type("trace.Pointer");
+    add_string_type("[]byte");
 }
 
 static void add_supported_type(const gchar *type, complex_arg_dissector_t dissector)
@@ -2552,8 +2560,11 @@ static void init_complex_types(void) {
     add_supported_type("const char*const*", dissect_string_array);
     add_supported_type("const char**", dissect_string_array);
     add_supported_type("const char **", dissect_string_array);
+    add_supported_type("[]string", dissect_string_array);
     add_supported_type("struct sockaddr*", dissect_sockaddr);
+    add_supported_type("SockAddr", dissect_sockaddr);
     add_supported_type("slim_cred_t", dissect_slim_cred_t);
+    add_supported_type("trace.SlimCred", dissect_slim_cred_t);
     add_supported_type("trace.PktMeta", dissect_pktmeta);
     add_supported_type("[]trace.DnsQueryData", dissect_dns_query_data);
     add_supported_type("trace.ProtoHTTPRequest", dissect_proto_http_request);
@@ -2563,7 +2574,9 @@ static void init_complex_types(void) {
     add_supported_type("[]trace.HookedSymbolData", dissect_hooked_symbol_data_arr);
     add_supported_type("[]trace.DnsResponseData", dissect_dns_response_data);
     add_supported_type("int[2]", dissect_signed_int_array);
+    add_supported_type("[2]int", dissect_signed_int_array);
     add_supported_type("unsigned long[]", dissect_unsigned_int_array);
+    add_supported_type("[]uint64", dissect_unsigned_int_array);
 
     // add unsupported types (these are types that were encountered but aren't dissected yet)
     add_unsupported_type("trace.ProtoTCP");
