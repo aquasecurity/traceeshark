@@ -156,12 +156,37 @@ static int enrich_security_socket_connect(tvbuff_t *tvb _U_, packet_info *pinfo,
     return enrich_security_socket_bind_connect(pinfo, "Connect");
 }
 
+static const gchar *get_mem_prot_alert_str(guint alert)
+{
+    switch (alert) {
+        case 1:
+            return "Mmaped region with W+E permissions!";
+        case 2:
+            return "Protection changed to Executable!";
+        case 3:
+            return "Protection changed from E to W+E!";
+        case 4:
+            return "Protection changed from W to E!";
+        default:
+            return "Unknown alert";
+    }
+}
+
 static int enrich_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    const gchar *alert = wanted_field_get_str("tracee.args.dynamic_code_loading.triggered_by.alert");
+    const struct field_value *alert;
+    const gchar *alert_str = NULL;
+    
+    if ((alert = wanted_field_get_one("tracee.args.dynamic_code_loading.triggered_by.alert")) == NULL)
+        return 0;
+    
+    if (alert->type == FIELD_TYPE_STRING)
+        alert_str = alert->val.val_string;
+    else if (alert->type == FIELD_TYPE_UINT)
+        alert_str = get_mem_prot_alert_str(alert->val.val_uint);
 
-    if (alert)
-        col_append_str(pinfo->cinfo, COL_INFO, alert);
+    if (alert_str != NULL)
+        col_append_str(pinfo->cinfo, COL_INFO, alert_str);
     
     return 0;
 }
@@ -178,7 +203,7 @@ static int enrich_fileless_execution(tvbuff_t *tvb _U_, packet_info *pinfo, prot
 
 static int enrich_stdio_over_socket(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    gint *fd;
+    const gint *fd;
     const gchar *addr, *port, *stream;
 
     fd = wanted_field_get_int("tracee.args.stdio_over_socket.File_descriptor");

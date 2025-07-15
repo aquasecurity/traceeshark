@@ -67,10 +67,10 @@ struct field_value {
 };
 
 void register_wanted_field(const gchar *filter_name);
-wmem_array_t *wanted_field_get(const gchar *filter_name);
-struct field_value *wanted_field_get_one(const gchar *filter_name);
+const wmem_array_t *wanted_field_get(const gchar *filter_name);
+const struct field_value *wanted_field_get_one(const gchar *filter_name);
 const gchar *wanted_field_get_str(const gchar *filter_name);
-gint *wanted_field_get_int(const gchar *filter_name);
+const gint *wanted_field_get_int(const gchar *filter_name);
 
 proto_item *proto_tree_add_int_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, gint32 value);
 proto_item *proto_tree_add_uint_wanted(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint start, gint length, guint32 value);
