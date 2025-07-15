@@ -31,7 +31,7 @@ static struct container_info *dup_container_info(const struct container_info *co
 
 void process_tree_update(struct tracee_dissector_data *data)
 {
-    gint *fork_child_pid, *fork_child_tid;
+    const gint *fork_child_pid, *fork_child_tid;
     gint *pid_key, *pid_val;
     struct process_info *process;
 

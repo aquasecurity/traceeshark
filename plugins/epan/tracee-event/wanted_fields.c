@@ -26,24 +26,24 @@ void register_wanted_field(const gchar *filter_name)
     wmem_map_insert(wanted_fields, key, NULL);
 }
 
-wmem_array_t *wanted_field_get(const gchar *filter_name)
+const wmem_array_t *wanted_field_get(const gchar *filter_name)
 {
     return wmem_map_lookup(wanted_field_values, filter_name);
 }
 
-struct field_value *wanted_field_get_one(const gchar *filter_name)
+const struct field_value *wanted_field_get_one(const gchar *filter_name)
 {
-    wmem_array_t *values = wanted_field_get(filter_name);
+    const wmem_array_t *values = wanted_field_get(filter_name);
 
-    if (values && wmem_array_get_count(values) >= 1)
-        return *((struct field_value **)wmem_array_index(values, 0));
+    if (values && wmem_array_get_count((wmem_array_t *)values) >= 1)
+        return *((struct field_value **)wmem_array_index((wmem_array_t *)values, 0));
     
     return NULL;
 }
 
 const gchar *wanted_field_get_str(const gchar *filter_name)
 {
-    struct field_value *fv;
+    const struct field_value *fv;
 
     if ((fv = wanted_field_get_one(filter_name)) == NULL)
         return NULL;
@@ -52,9 +52,9 @@ const gchar *wanted_field_get_str(const gchar *filter_name)
     return fv->val.val_string;
 }
 
-gint *wanted_field_get_int(const gchar *filter_name)
+const gint *wanted_field_get_int(const gchar *filter_name)
 {
-    struct field_value *fv;
+    const struct field_value *fv;
 
     if ((fv = wanted_field_get_one(filter_name)) == NULL)
         return NULL;
