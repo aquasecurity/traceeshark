@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.9
+
+**Added:**
+
+* Dissection: support new tracee type names
+
+**Changed:**
+
+* Releases are now built for Wireshark 4.4.8 instead of 4.4.5
+
+**Fixed:**
+
+* Dissection fixes
+
+* Live capture fixes
+
 ## v0.3.8
 
 **Changed:**
