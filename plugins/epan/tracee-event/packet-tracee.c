@@ -2540,6 +2540,7 @@ static void init_string_types(void) {
     add_string_type("struct perf_event_attr*");
     add_string_type("trace.Pointer");
     add_string_type("[]byte");
+    add_string_type("time.Time");
 }
 
 static void add_supported_type(const gchar *type, complex_arg_dissector_t dissector)
