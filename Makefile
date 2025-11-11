@@ -3,6 +3,8 @@ export
 
 OS_NAME := $(shell uname -s)
 
+TRACEESHARK_CMAKE_OPTIONS := $(TRACEESHARK_CMAKE_OPTIONS) -DCMAKE_C_FLAGS="-Wno-documentation"
+
 # update Wireshark source tree and build
 all: sync build
 
