@@ -112,7 +112,7 @@ For an overview of display columns see [Columns](#columns).
 
 ### Signatures
 
-Tracee signatures have some extra information in them, which can be seen in the dissection tree. The ***Triggered By*** tree contains the event which triggered the signature, together with its own arguments. The ***Metadata*** tree contains information about the signature, including its name, description, severity level, attack technique and more.
+Tracee signatures have some extra information in them, which can be seen in the dissection tree. The ***Detected From*** tree contains the event which the signature was detected from, together with its own arguments. The ***Metadata*** tree contains information about the signature, including its name, description, severity level, attack technique and more.
 
 ![](img/signature.png)
 

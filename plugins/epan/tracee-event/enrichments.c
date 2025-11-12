@@ -177,7 +177,7 @@ static int enrich_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, pr
     const struct field_value *alert;
     const gchar *alert_str = NULL;
     
-    if ((alert = wanted_field_get_one("tracee.args.dynamic_code_loading.triggered_by.alert")) == NULL)
+    if ((alert = wanted_field_get_one("tracee.args.dynamic_code_loading.detected_from.alert")) == NULL)
         return 0;
     
     if (alert->type == FIELD_TYPE_STRING)
@@ -193,7 +193,7 @@ static int enrich_dynamic_code_loading(tvbuff_t *tvb _U_, packet_info *pinfo, pr
 
 static int enrich_fileless_execution(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data _U_)
 {
-    const gchar *pathname = wanted_field_get_str("tracee.args.fileless_execution.triggered_by.pathname");
+    const gchar *pathname = wanted_field_get_str("tracee.args.fileless_execution.detected_from.pathname");
 
     if (pathname)
         col_append_fstr(pinfo->cinfo, COL_INFO, "Running from %s", pathname);
@@ -518,10 +518,10 @@ static void register_wanted_fields(void)
     register_wanted_field("tracee.sockaddr.sun_path");
 
     // needed for enrich_dynamic_code_loading
-    register_wanted_field("tracee.args.dynamic_code_loading.triggered_by.alert");
+    register_wanted_field("tracee.args.dynamic_code_loading.detected_from.alert");
 
     // needed for enrich_fileless_execution
-    register_wanted_field("tracee.args.fileless_execution.triggered_by.pathname");
+    register_wanted_field("tracee.args.fileless_execution.detected_from.pathname");
 
     // needed for enrich_stdio_over_socket
     register_wanted_field("tracee.args.stdio_over_socket.File_descriptor");

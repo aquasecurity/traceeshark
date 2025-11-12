@@ -222,7 +222,7 @@ static gint ett_int_arr = -1;
 static gint ett_process_lineage = -1;
 static gint ett_process_lineage_process = -1;
 static gint ett_root_cause = -1;
-static gint ett_triggered_by = -1;
+static gint ett_detected_from = -1;
 static gint ett_arg_obj = -1;
 static gint ett_arg_obj_arr = -1;
 static gint ett_http_headers = -1;
@@ -2084,45 +2084,45 @@ static gchar *dissect_hooked_symbol_data_arr(tvbuff_t *tvb, packet_info *pinfo,
     return dissect_object_array_arg(tvb, pinfo, tree, json_data, arg_tok, hf->hfinfo.name, do_dissect_hooked_symbol_data);
 }
 
-static void dissect_triggered_by(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
+static void dissect_detected_from(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     gchar *json_data, jsmntok_t *arg_tok, const gchar *event_name, struct tracee_dissector_data *data)
 {
-    proto_item *triggered_by_item;
-    proto_tree *triggered_by_tree;
-    jsmntok_t *triggered_by_tok;
+    proto_item *detected_from_item;
+    proto_tree *detected_from_tree;
+    jsmntok_t *detected_from_tok;
     gint64 tmp_int;
     gchar *tmp_str;
 
-    // create triggered by subtree
-    triggered_by_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
-    proto_item_set_text(triggered_by_item, "Triggered By");
-    triggered_by_tree = proto_item_add_subtree(triggered_by_item, ett_triggered_by);
+    // create detected from subtree
+    detected_from_item = proto_tree_add_item(tree, proto_tracee, tvb, 0, 0, ENC_NA);
+    proto_item_set_text(detected_from_item, "Detected From");
+    detected_from_tree = proto_item_add_subtree(detected_from_item, ett_detected_from);
 
-    // get triggered by object
-    DISSECTOR_ASSERT((triggered_by_tok = json_get_object(json_data, arg_tok, "value")) != NULL);
+    // get detected from object
+    DISSECTOR_ASSERT((detected_from_tok = json_get_object(json_data, arg_tok, "value")) != NULL);
 
     // add id
-    if (!json_get_int(json_data, triggered_by_tok, "id", &tmp_int)) {
-        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, triggered_by_tok, "id")) != NULL);
+    if (!json_get_int(json_data, detected_from_tok, "id", &tmp_int)) {
+        DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, detected_from_tok, "id")) != NULL);
         errno = 0;
         tmp_int = strtoll(tmp_str, NULL, 10);
         DISSECTOR_ASSERT(errno == 0);
     }
-    proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_id, tvb, 0, 0, tmp_int);
+    proto_tree_add_int64(detected_from_tree, hf_tiggered_by_id, tvb, 0, 0, tmp_int);
 
     // add name
-    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, triggered_by_tok, "name")) != NULL);
-    proto_tree_add_string(triggered_by_tree, hf_tiggered_by_name, tvb, 0, 0, tmp_str);
+    DISSECTOR_ASSERT((tmp_str = json_get_string(json_data, detected_from_tok, "name")) != NULL);
+    proto_tree_add_string(detected_from_tree, hf_tiggered_by_name, tvb, 0, 0, tmp_str);
     if (strlen(tmp_str) > 0)
-        proto_item_append_text(triggered_by_item, ": %s", tmp_str);
+        proto_item_append_text(detected_from_item, ": %s", tmp_str);
 
     // add return value
-    DISSECTOR_ASSERT(json_get_int(json_data, triggered_by_tok, "returnValue", &tmp_int));
-    proto_tree_add_int64(triggered_by_tree, hf_tiggered_by_return_value, tvb, 0, 0, tmp_int);
+    DISSECTOR_ASSERT(json_get_int(json_data, detected_from_tok, "returnValue", &tmp_int));
+    proto_tree_add_int64(detected_from_tree, hf_tiggered_by_return_value, tvb, 0, 0, tmp_int);
 
     // add args
-    dissect_arguments(tvb, pinfo, triggered_by_tree, json_data, triggered_by_tok,
-        wmem_strdup_printf(pinfo->pool, "%s.triggered_by", event_name), FALSE, data);
+    dissect_arguments(tvb, pinfo, detected_from_tree, json_data, detected_from_tok,
+        wmem_strdup_printf(pinfo->pool, "%s.detected_from", event_name), FALSE, data);
 }
 
 /**
@@ -2178,10 +2178,10 @@ static void dissect_arguments(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
         // get hf for this argument
         hf = get_arg_hf(event_name, json_data, curr_arg);
 
-        // special case of trggieredBy argument which will recursively
+        // special case of triggeredBy/detectedFrom argument which will recursively
         // call back into dissect_arguments (needs extra parameters)
-        if (strcmp(arg_type, "unknown") == 0 && strcmp(hf->hfinfo.name, "triggeredBy") == 0)
-            dissect_triggered_by(tvb, pinfo, tree, json_data, curr_arg, event_name, data);
+        if (strcmp(arg_type, "unknown") == 0 && (strcmp(hf->hfinfo.name, "triggeredBy") == 0 || strcmp(hf->hfinfo.name, "detectedFrom") == 0))
+            dissect_detected_from(tvb, pinfo, tree, json_data, curr_arg, event_name, data);
 
         // try dissecting this as a complex arg
         else if ((dissector = wmem_map_lookup(complex_type_dissectors, arg_type)) != NULL)
@@ -2608,7 +2608,7 @@ void proto_register_tracee(void)
         &ett_process_lineage,
         &ett_process_lineage_process,
         &ett_root_cause,
-        &ett_triggered_by,
+        &ett_detected_from,
         &ett_arg_obj,
         &ett_arg_obj_arr,
         &ett_http_headers,
@@ -2848,19 +2848,19 @@ void proto_register_tracee(void)
               NULL, HFILL }
           },
         { &hf_tiggered_by_id,
-          { "Event ID", "tracee.triggered_by.id",
+          { "Event ID", "tracee.detected_from.id",
             FT_INT64, BASE_DEC, NULL, 0,
-            "ID of the event that triggered the signature", HFILL }
+            "ID of the event that the signature was detected from", HFILL }
         },
         { &hf_tiggered_by_name,
-          { "Event Name", "tracee.triggered_by.name",
+          { "Event Name", "tracee.detected_from.name",
             FT_STRINGZ, BASE_NONE, NULL, 0,
-            "Name of the event that triggered the signature", HFILL }
+            "Name of the event that the signature was detected from", HFILL }
         },
         { &hf_tiggered_by_return_value,
-          { "Return Value", "tracee.triggered_by.return_value",
+          { "Return Value", "tracee.detected_from.return_value",
             FT_INT64, BASE_DEC, NULL, 0,
-            "Return value of the event that triggered the signature", HFILL }
+            "Return value of the event that the signature was detected from", HFILL }
         },
         { &hf_metadata_version,
           { "Version", "tracee.metadata.Version",
