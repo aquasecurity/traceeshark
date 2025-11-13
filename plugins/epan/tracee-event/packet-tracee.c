@@ -729,6 +729,8 @@ static hf_register_info *get_arg_hf(const gchar *event_name, gchar *json_data, j
         arg_type = "string";
     else if (strcmp(event_name, "security_socket_create") == 0 && strcmp(arg_name, "family") == 0)
         arg_type = "string";
+    else if (strcmp(event_name, "ptrace") == 0 && strcmp(arg_name, "request") == 0)
+        arg_type = "string";
     
     // create the hf and add it to the array
     hf = g_new0(hf_register_info, 1);
