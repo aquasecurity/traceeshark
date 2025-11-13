@@ -5,6 +5,7 @@
 
 static int hf_decoded_data = -1;
 static int hf_file_type = -1;
+static int hf_ptrace_request = -1;
 
 static int enrich_sched_process_exec(tvbuff_t *tvb _U_, packet_info *pinfo, proto_tree *tree _U_, void *data)
 {
@@ -489,6 +490,139 @@ static int enrich_security_file_open(tvbuff_t *tvb _U_, packet_info *pinfo, prot
     return 0;
 }
 
+static int enrich_ptrace(tvbuff_t *tvb _U_, packet_info *pinfo _U_, proto_tree *tree _U_, void *data)
+{
+    struct tracee_dissector_data *dissector_data = (struct tracee_dissector_data *)data;
+    const gchar *request, *request_name;
+    char *endptr;
+    gint64 request_int;
+    bool req_field_is_int;
+    proto_item *request_name_item;
+
+    if ((request = wanted_field_get_str("tracee.args.ptrace.request")) == NULL)
+        return 0;
+    
+    // Try converting request field to int
+    errno = 0;
+    request_int = strtoull(request, &endptr, 10);
+    DISSECTOR_ASSERT(errno == 0);
+    if (*endptr == '\0') {
+        // There are no invalid characters - entire string is an int
+        req_field_is_int = true;
+
+        // Convert request number to name
+        switch (request_int) {
+            case 0:
+                request_name = "PTRACE_TRACEME";
+                break;
+            case 1:
+                request_name = "PTRACE_PEEKTEXT";
+                break;
+            case 2:
+                request_name = "PTRACE_PEEKDATA";
+                break;
+            case 3:
+                request_name = "PTRACE_PEEKUSER";
+                break;
+            case 4:
+                request_name = "PTRACE_POKETEXT";
+                break;
+            case 5:
+                request_name = "PTRACE_POKEDATA";
+                break;
+            case 6:
+                request_name = "PTRACE_POKEUSER";
+                break;
+            case 7:
+                request_name = "PTRACE_CONT";
+                break;
+            case 8:
+                request_name = "PTRACE_KILL";
+                break;
+            case 9:
+                request_name = "PTRACE_SINGLESTEP";
+                break;
+            case 16:
+                request_name = "PTRACE_ATTACH";
+                break;
+            case 17:
+                request_name = "PTRACE_DETACH";
+                break;
+            case 24:
+                request_name = "PTRACE_SYSCALL";
+                break;
+            case 31:
+                request_name = "PTRACE_SYSEMU";
+                break;
+            case 32:
+                request_name = "PTRACE_SYSEMU_SINGLESTEP";
+                break;
+            case 0x4200:
+                request_name = "PTRACE_SETOPTIONS";
+                break;
+            case 0x4201:
+                request_name = "PTRACE_GETEVENTMSG";
+                break;
+            case 0x4202:
+                request_name = "PTRACE_GETSIGINFO";
+                break;
+            case 0x4203:
+                request_name = "PTRACE_SETSIGINFO";
+                break;
+            case 0x4204:
+                request_name = "PTRACE_GETREGSET";
+                break;
+            case 0x4205:
+                request_name = "PTRACE_SETREGSET";
+                break;
+            case 0x4206:
+                request_name = "PTRACE_SEIZE";
+                break;
+            case 0x4207:
+                request_name = "PTRACE_INTERRUPT";
+                break;
+            case 0x4208:
+                request_name = "PTRACE_LISTEN";
+                break;
+            case 0x4209:
+                request_name = "PTRACE_PEEKSIGINFO";
+                break;
+            case 0x420a:
+                request_name = "PTRACE_GETSIGMASK";
+                break;
+            case 0x420b:
+                request_name = "PTRACE_SETSIGMASK";
+                break;
+            case 0x420c:
+                request_name = "PTRACE_SECCOMP_GET_FILTER";
+                break;
+            case 0x420d:
+                request_name = "PTRACE_SECCOMP_GET_METADATA";
+                break;
+            case 0x420e:
+                request_name = "PTRACE_GET_SYSCALL_INFO";
+                break;
+            case 0x420f:
+                request_name = "PTRACE_GET_RSEQ_CONFIGURATION";
+                break;
+            default:
+                request_name = request;
+        }
+    }
+    else {
+        req_field_is_int = false;
+        request_name = request;
+    }
+
+    request_name_item = proto_tree_add_string_wanted(dissector_data->args_tree, hf_ptrace_request, tvb, 0, 0, request_name);
+    proto_item_set_generated(request_name_item);
+
+    if (!req_field_is_int)
+        proto_item_set_hidden(request_name_item);
+    
+    return 0;
+}
+
 static void register_wanted_fields(void)
 {
     // needed for enrich_sched_process_exec
@@ -535,6 +669,9 @@ static void register_wanted_fields(void)
     // needed for enrich_security_file_open
     register_wanted_field("tracee.args.security_file_open.pathname");
     register_wanted_field("tracee.args.security_file_open.syscall_pathname");
+
+    // needed for ptrace
+    register_wanted_field("tracee.args.ptrace.request");
 }
 
 void register_tracee_enrichments(int proto)
@@ -547,6 +684,11 @@ void register_tracee_enrichments(int proto)
         },
         { &hf_file_type,
           { "File type", "tracee.args.magic_write.file_type",
+            FT_STRINGZ, BASE_NONE, NULL, 0,
+            NULL, HFILL }
+        },
+        { &hf_ptrace_request,
+          { "Request Name", "tracee.args.ptrace.request_name",
             FT_STRINGZ, BASE_NONE, NULL, 0,
             NULL, HFILL }
         },
@@ -580,4 +722,5 @@ void proto_reg_handoff_tracee_enrichments(void)
     register_tracee_event_enrichment("stdio_over_socket", enrich_stdio_over_socket);
     register_tracee_event_enrichment("magic_write", enrich_magic_write);
     register_tracee_event_enrichment("security_file_open", enrich_security_file_open);
+    register_tracee_event_enrichment("ptrace", enrich_ptrace);
 }
